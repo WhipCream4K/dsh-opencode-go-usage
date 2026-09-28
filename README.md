@@ -8,7 +8,7 @@
 
 ![Footer demo](assets/custom-footer.png)
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle**，在 Web 界面的输入框上方 dock（与内置 token 统计同位置）显示 [OpenCode Go](https://opencode.ai/docs/go/) 订阅用量。
+一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle**，在 Web 界面输入框的工具行（模型选择器旁）显示 [OpenCode Go](https://opencode.ai/docs/go/) 订阅用量。
 
 它是 [pi-ocgo-usage](https://github.com/v587d/pi-ocgo-usage)（Pi 插件）的 Web 对应物：三个用量窗口（5h 滚动 / 每周 / 每月）的百分比与重置倒计时，按阈值变色，让你在窗口耗尽、请求被限流之前就发现。
 
@@ -22,7 +22,7 @@ OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 - **颜色阈值** —— 正常 → 黄色警告（≥80%）→ 红色错误（≥90% 或已限流）
 - **数据新鲜度** —— `upd HH:MM` 显示最近一次成功抓取时间
 - **轻量轮询** —— 每 10s 轮询（切回标签页立即刷新）；host 端 300s 缓存（TTL 可配）+ 60s 失败冷却，不会频繁打扰 opencode.ai
-- **Provider 感知** —— 仅当会话当前模型走 `opencode-go` provider 时显示；每次轮询读取内存中的实时模型选择（`session.models`，毫秒级），切到 DeepSeek 官方等其它 provider 后一个轮询周期内自动隐藏，切回自动恢复（与 pi-ocgo-usage 行为一致）
+- **Provider 感知** —— 仅当会话当前模型走 `opencode-go` provider 时显示；每次轮询读取内存中的实时模型选择（会话的 `modelSelection` 投影，不发起网络请求），切到 DeepSeek 官方等其它 provider 后一个轮询周期内自动隐藏，切回自动恢复（与 pi-ocgo-usage 行为一致）
 - **点击展开** —— 详情面板显示每个窗口的重置倒计时，左下角 `Set` 可配置凭据，右侧 `refresh upd HH:MM` 手动刷新
 - **内置凭据编辑器** —— 无需碰终端：`Set` 面板直接修改 workspace id 与 cookie（输入框以 `••••` + 末尾 4 位显示，点击外部 / Esc / 保存确认写入）
 - **优雅降级** —— 配置缺失显示 `<err:noconfig>`，HTTP 失败显示 `<err:httpXXX>`；出错时点击 chip 直接进入 Set 面板
@@ -32,8 +32,10 @@ OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 
 ## 环境要求
 
-- DeepSeek Harness `0.1.0-rc.6` 或更新（web profile）
+- DeepSeek Harness（web profile），客户端需提供会话 `modelSelection` 投影（已在 `0.1.7-rc.2` 上验证）
 - `PATH` 上有 pnpm（`dsh plugin` 需要）
+
+浏览器半通过 `ctx.sessions.binding(id).session.projections.faceOf('modelSelection')` 读取当前 provider。`0.1.7-rc.2` 移除了旧版的 `connection.api.sessions`；如果某个 Harness 版本两套 API 都没有，chip 会注册成功但永远不渲染，也不会在控制台留任何提示。
 
 ## 安装
 
@@ -72,7 +74,7 @@ pnpm run build
 dsh plugin --profile web add link:$(pwd)
 ```
 
-**重启 `dsh web` 并刷新页面**，chip 出现在输入框上方的 dock。不启动即可验证插件层已组合：
+**重启 `dsh web` 并刷新页面**，chip 出现在输入框工具行、模型选择器旁。不启动即可验证插件层已组合：
 
 ```sh
 dsh --profile web --dump-config   # 应显示 "# == dsh-ocgo-usage" 层
@@ -134,10 +136,14 @@ chmod 600 ~/.dsh/ocgo-usage.json
 
 ![Usage detail](assets/usage-detail.png)
 
+### chip 不显示
+
+可见性只认 `opencode-go` 和 `opencode-go/<子路由>` 这两种 provider id。形如 `opencode-go-live-completions` 的连字符路由名会被当成别的 provider 静默忽略；chip 不渲染，控制台也没有任何提示。把 profile 的 `cordis.patch.yml` 里该路由 id 改成 `opencode-go/live-completions` 这种带斜杠的写法即可。
+
 ## 工作原理
 
 - **Host 半**（`src/index.ts`、`src/service.ts`、`src/api.ts`、`src/routes.ts`）—— 携带 cookie 抓取 `GET /workspace/<wrk>/go`，解析 SSR 渲染的 `data-slot="usage-item"` 块为每个窗口的 `{percent, resetInSec, status}`，缓存结果，通过同源 JSON 端点 `/api/ocgo-usage`（+ `/api/ocgo-usage/refresh`、`/api/ocgo-usage/config`）提供数据。
-- **浏览器半**（`src/client/`）—— 向 `conversation.composer.dock` slot 注册 chip，每 10s 轮询 host 端点，按严重级别着色渲染三个窗口；可见性来自 `session.models` 的实时 provider 判断。
+- **浏览器半**（`src/client/`）—— 向 `conversation.input.right` slot（输入框工具行，模型选择器旁）注册 chip，每 10s 轮询 host 端点，按严重级别着色渲染三个窗口；可见性来自会话 `modelSelection` 投影里的实时 provider。
 
 浏览器永远看不到 cookie；抓取与解析全部在 host 侧完成。
 

@@ -9,12 +9,11 @@
  * `<err:code>` state with a manual refresh action.
  *
  * Provider visibility is decided CLIENT-side from the live model selection:
- * `session.models` reads the in-memory current selection (2-3 ms warm, no
- * network), so switching models via `/model` is reflected on the very next
- * poll — the host's request-header fold lags until the next real request,
- * which is why visibility does not ride the usage endpoint. The chip renders
- * nothing while the current provider is not `opencode-go`, mirroring
- * pi-ocgo-usage.
+ * the session's `modelSelection` projection is read in memory (no network), so
+ * switching models via `/model` is reflected on the very next poll — the
+ * host's request-header fold lags until the next real request, which is why
+ * visibility does not ride the usage endpoint. The chip renders nothing while
+ * the current provider is not `opencode-go`, mirroring pi-ocgo-usage.
  * @module dsh-ocgo-usage/client
  */
 
@@ -47,13 +46,40 @@ const NS = 'ocgo'
 /** Required services: slots for the composer tool-row entry, locale for the copy. */
 export const inject = ['slots', 'locale']
 
+/**
+ * The selected model of a session's `modelSelection` projection. Committed
+ * state carries `lastUsed`/`pending`; the wire view renames the effective
+ * choice to `next`, so all three are read.
+ */
+interface ModelSelectionView {
+  /** Effective selection as the wire view names it. */
+  next?: { provider?: string }
+  /** Committed choice awaiting its first use. */
+  pending?: { provider?: string }
+  /** Last selection the session actually used. */
+  lastUsed?: { provider?: string }
+}
+
+/**
+ * The client `sessions` service as this plugin needs it: resolve a session id
+ * to its binding, then read a projection off the bound session. Only these
+ * two hops are used, so the face stays a local structural type instead of an
+ * import from the session-controller package.
+ */
+interface SessionsFace {
+  /** Resolve the live binding of a session, if it is open. */
+  binding(id: string): {
+    session: { projections: { faceOf(key: string): { getSnapshot(): unknown } } }
+  } | undefined
+}
+
 /** The injected business face: the tool row's owning session plus a live provider read. */
 export interface OcgoInjected {
   /** The session this dock entry renders for (slot inject factory arg). */
   dockSessionId: string | undefined
   /**
    * Resolve the CURRENT model provider of the dock's session from the live
-   * in-memory selection (`session.models`, warm ~ms). Undefined when the
+   * in-memory `modelSelection` projection (no network). Undefined when the
    * session has no selection yet.
    */
   provider(): Promise<string | undefined>
@@ -66,25 +92,23 @@ export interface OcgoInjected {
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ocgo-usage: dictionaries')
 
-  ctx.inject(['slots', 'conversation', 'connection'], (scope: ClientContext) => {
+  ctx.inject(['slots', 'conversation', 'sessions'], (scope: ClientContext) => {
     scope.effect(() => scope.slots.register({
       name: 'conversation.input.right',
       id: 'ocgo-usage',
       order: 110,
       locale: NS,
       inject: (sessionId): OcgoInjected => {
-        const handle = scope.get('connection') as
-          | { readonly api: { sessions: { models(request: { sessionId: string }): Promise<{ result: { ok: boolean; value?: { current?: { provider?: string } } } }> } } }
-          | undefined
+        const sessions = scope.get('sessions') as SessionsFace | undefined
         return {
           dockSessionId: sessionId,
           provider: async () => {
-            const sessions = handle?.api?.sessions
-            if (sessions === undefined) return undefined
             try {
-              const { result } = await sessions.models({ sessionId })
-              if (!result.ok) return undefined
-              return result.value?.current?.provider
+              const binding = sessions?.binding?.(sessionId)
+              const face = binding?.session?.projections?.faceOf?.('modelSelection')
+              const snapshot = face?.getSnapshot?.() as ModelSelectionView | undefined
+              const selection = snapshot?.next ?? snapshot?.pending ?? snapshot?.lastUsed
+              return selection?.provider
             } catch {
               return undefined
             }

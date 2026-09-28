@@ -188,7 +188,7 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
 
   // One periodic tick:
   //   1. resolve the session's CURRENT provider from the live in-memory
-  //      selection (session.models, warm ~ms) and toggle `visible`;
+  //      `modelSelection` projection and toggle `visible`;
   //   2. only while visible, fetch the usage snapshot.
   const pollNow = useCallback(() => {
     let live = true

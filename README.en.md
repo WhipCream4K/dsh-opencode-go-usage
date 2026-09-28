@@ -8,7 +8,7 @@ English | [中文](README.md)
 
 ![Footer demo](assets/custom-footer.png)
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle** that shows [OpenCode Go](https://opencode.ai/docs/go/) subscription usage in the Web GUI's composer dock — the same seat as the built-in conversation stats line.
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle** that shows [OpenCode Go](https://opencode.ai/docs/go/) subscription usage in the Web GUI's composer tool row, next to the model selector.
 
 The Web counterpart of the [pi-ocgo-usage](https://github.com/v587d/pi-ocgo-usage) Pi extension: three usage windows (rolling 5h, weekly, monthly) with percentages and reset countdowns, color-coded so you see a window approaching exhaustion before you hit the rate limit mid-work.
 
@@ -22,7 +22,7 @@ OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 - **Color thresholds** — muted → warning (≥80%) → error (≥90% or rate-limited)
 - **Data freshness** — `upd HH:MM` shows the last successful fetch time
 - **Lightweight polling** — every 10 s (and on tab refocus); the host caches for 300 s (TTL configurable) with a 60 s failure cooldown, so opencode.ai is never hammered
-- **Provider-aware** — the chip shows only while the session's current model routes through the `opencode-go` provider. Visibility reads the live in-memory model selection (`session.models`, ~ms warm) on every poll, so switching to e.g. DeepSeek official via `/model` hides it within one 10 s cycle and switching back re-shows it (mirrors pi-ocgo-usage)
+- **Provider-aware** — the chip shows only while the session's current model routes through the `opencode-go` provider. Visibility reads the live in-memory selection (the session's `modelSelection` projection, no network request) on every poll, so switching to e.g. DeepSeek official via `/model` hides it within one 10 s cycle and switching back re-shows it (mirrors pi-ocgo-usage)
 - **Click to expand** — detail panel with per-window reset countdowns, a `Set` credential editor, and `refresh upd HH:MM`
 - **Built-in credential editor** — no terminal needed: the `Set` panel edits workspace id and cookie in place (fields show `••••` + last 4 chars; click outside / Esc / Save confirms the write)
 - **Graceful degradation** — missing config shows `<err:noconfig>`, HTTP failures `<err:httpXXX>`; on error, clicking the chip opens the Set editor directly
@@ -32,8 +32,10 @@ OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 
 ## Requirements
 
-- DeepSeek Harness `0.1.0-rc.6` or newer (web profile)
+- DeepSeek Harness (web profile) whose client exposes the session `modelSelection` projection (verified on `0.1.7-rc.2`)
 - pnpm on `PATH` (for `dsh plugin`)
+
+The browser half reads the current provider through `ctx.sessions.binding(id).session.projections.faceOf('modelSelection')`. `0.1.7-rc.2` removed the older `connection.api.sessions`. A Harness build that offers neither leaves the chip registered but permanently invisible, with nothing in the console to say why.
 
 ## Installation
 
@@ -72,7 +74,7 @@ pnpm run build
 dsh plugin --profile web add link:$(pwd)
 ```
 
-**Restart `dsh web`, then refresh the page.** The usage chip appears in the composer dock next to the conversation stats line. Verify the plugin layer is composed without booting:
+**Restart `dsh web`, then refresh the page.** The usage chip appears in the composer tool row, next to the model selector. Verify the plugin layer is composed without booting:
 
 ```sh
 dsh --profile web --dump-config   # shows a "# == dsh-ocgo-usage" layer
@@ -134,10 +136,14 @@ Click the chip to expand the detail panel: each window shows its full name, perc
 
 ![Usage detail](assets/usage-detail.png)
 
+### The chip never shows up
+
+Visibility accepts exactly two provider id shapes: `opencode-go` and `opencode-go/<sub-route>`. A hyphenated route name such as `opencode-go-live-completions` is treated as a different provider and ignored without a word, so the chip never renders and the console stays empty. Rename that route in the profile's `cordis.patch.yml` to `opencode-go/live-completions` and it appears.
+
 ## How it works
 
 - **Host half** (`src/index.ts`, `src/service.ts`, `src/api.ts`, `src/routes.ts`) — fetches `GET /workspace/<wrk>/go` with the cookie, parses the SSR-rendered `data-slot="usage-item"` blocks into `{percent, resetInSec, status}` per window, caches the result, and serves it as same-origin JSON at `/api/ocgo-usage` (+ `/api/ocgo-usage/refresh`, `/api/ocgo-usage/config`).
-- **Browser half** (`src/client/`) — registers a chip into the `conversation.composer.dock` slot, polls the host endpoints every 10 s, and renders the three windows with severity colors; visibility comes from the live provider in `session.models`.
+- **Browser half** (`src/client/`) — registers a chip into the `conversation.input.right` slot (the composer tool row, next to the model selector), polls the host endpoints every 10 s, and renders the three windows with severity colors; visibility comes from the live provider in the session's `modelSelection` projection.
 
 The browser never sees the cookie; all fetching and parsing happen on the host.
 

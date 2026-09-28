@@ -9,12 +9,11 @@
  * `<err:code>` state with a manual refresh action.
  *
  * Provider visibility is decided CLIENT-side from the live model selection:
- * `session.models` reads the in-memory current selection (2-3 ms warm, no
- * network), so switching models via `/model` is reflected on the very next
- * poll — the host's request-header fold lags until the next real request,
- * which is why visibility does not ride the usage endpoint. The chip renders
- * nothing while the current provider is not `opencode-go`, mirroring
- * pi-ocgo-usage.
+ * the session's `modelSelection` projection is read in memory (no network), so
+ * switching models via `/model` is reflected on the very next poll — the
+ * host's request-header fold lags until the next real request, which is why
+ * visibility does not ride the usage endpoint. The chip renders nothing while
+ * the current provider is not `opencode-go`, mirroring pi-ocgo-usage.
  * @module dsh-ocgo-usage/client
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
@@ -36,7 +35,7 @@ export interface OcgoInjected {
     dockSessionId: string | undefined;
     /**
      * Resolve the CURRENT model provider of the dock's session from the live
-     * in-memory selection (`session.models`, warm ~ms). Undefined when the
+     * in-memory `modelSelection` projection (no network). Undefined when the
      * session has no selection yet.
      */
     provider(): Promise<string | undefined>;
