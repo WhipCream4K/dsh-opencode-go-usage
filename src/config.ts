@@ -1,17 +1,19 @@
 /**
- * Configuration loader for dsh-ocgo-usage
+ * Configuration loader for dsh-ocgo-usage.
  *
- * Priority: env vars > config file ($DSH_HOME/ocgo-usage.json) > built-in defaults
+ * Priority: env vars > config file ($DSH_HOME/ocgo-usage.json) > built-in
+ * defaults. The credential seam (`ctx.credentials`) outranks both and is
+ * consulted by the service, not here, because it is asynchronous.
  *
- * The cookie is NEVER logged. If the config file is missing or unparseable,
- * we silently fall back to env vars + defaults — the browser readout shows a
- * clean `noconfig` error if neither source provides a usable value.
+ * The API key is NEVER logged. If the config file is missing or unparseable we
+ * silently fall back to env vars + defaults — the browser readout shows a clean
+ * `noconfig` error if no source provides a usable value.
  *
  * Env var names match the pi-ocgo-usage extension so one shell profile works
  * for both agents.
  *
  * The browser config editor (`/api/ocgo-usage/config`) reads a MASKED view
- * (never the full cookie) and writes back through {@link writeConfigFile}.
+ * (never the full key) and writes back through {@link writeConfigFile}.
  * @module dsh-ocgo-usage/config
  */
 
@@ -20,13 +22,17 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { MaskedConfigView, MaskedSecret, OcgoConfig } from './types.ts'
 
-export const ENV_COOKIE = 'OPENCODE_GO_COOKIE'
-export const ENV_WORKSPACE_ID = 'OPENCODE_GO_WORKSPACE_ID'
+export const ENV_API_KEY = 'OPENCODE_GO_API_KEY'
 export const ENV_BASE_URL = 'OPENCODE_GO_BASE_URL'
 export const ENV_CACHE_TTL = 'OPENCODE_GO_CACHE_TTL'
 export const ENV_TIMEOUT_MS = 'OPENCODE_GO_TIMEOUT_MS'
 
+/** The environment variable the credential seam resolves by default. */
+export const CREDENTIAL_REF = ENV_API_KEY
+
 export const DEFAULT_BASE_URL = 'https://opencode.ai'
+/** Quota path appended to the base URL (the official OpenCode Go endpoint). */
+export const USAGE_PATH = '/zen/go/v1/usage'
 export const DEFAULT_CACHE_TTL = 300
 export const DEFAULT_TIMEOUT_MS = 10_000
 export const MIN_CACHE_TTL = 60
@@ -44,9 +50,13 @@ export function configFilePath(): string {
   return join(dshHome(), 'ocgo-usage.json')
 }
 
+/** The full quota URL for a resolved config. */
+export function usageEndpoint(cfg: OcgoConfig): string {
+  return `${cfg.baseUrl.replace(/\/+$/, '')}${USAGE_PATH}`
+}
+
 interface FileConfig {
-  cookie?: unknown
-  workspaceID?: unknown
+  apiKey?: unknown
   baseUrl?: unknown
   cacheTTL?: unknown
   timeoutMs?: unknown
@@ -59,12 +69,10 @@ interface FileConfig {
 export function loadConfig(): OcgoConfig {
   const fileConfig = readFileConfig()
 
-  // Cookie: prefer env, fall back to file; normalize so users can paste
-  // either the full header or just the auth value.
-  const cookie = normalizeCookie(pickString(process.env[ENV_COOKIE], asString(fileConfig?.cookie)))
-
-  // Workspace ID: prefer env, fall back to file.
-  const workspaceID = pickString(process.env[ENV_WORKSPACE_ID], asString(fileConfig?.workspaceID))
+  // API key: prefer env, fall back to the config file. A key pasted with a
+  // `Bearer ` prefix or surrounding quotes is normalized so the common copy
+  // mistakes still authenticate.
+  const apiKey = normalizeApiKey(pickString(process.env[ENV_API_KEY], asString(fileConfig?.apiKey)))
 
   // baseUrl: prefer env, fall back to file, fall back to default.
   const baseUrl =
@@ -84,7 +92,7 @@ export function loadConfig(): OcgoConfig {
     pickNumber(process.env[ENV_TIMEOUT_MS], asNumber(fileConfig?.timeoutMs), DEFAULT_TIMEOUT_MS),
   )
 
-  return { cookie, workspaceID, baseUrl, cacheTTL, timeoutMs }
+  return { apiKey, baseUrl, cacheTTL, timeoutMs }
 }
 
 /** Mask the last 4 characters of a secret for the browser (full value when ≤ 4 chars). */
@@ -93,36 +101,23 @@ export function maskSecret(value: string | undefined): MaskedSecret {
   return { set: true, tail: value.length <= 4 ? value : value.slice(-4) }
 }
 
-/** The browser-facing masked config view (never reveals the full cookie). */
+/** The browser-facing masked config view (never reveals the full API key). */
 export function maskedConfigView(): MaskedConfigView {
-  const cfg = loadConfig()
-  return {
-    workspaceID: maskSecret(cfg.workspaceID),
-    cookie: maskSecret(cfg.cookie),
-  }
+  return { apiKey: maskSecret(loadConfig().apiKey) }
 }
 
 /**
- * Write cookie / workspaceID into the config file (preserving any other
- * fields), chmod 600, and return the updated masked view. Values are
- * normalized like env input (cookie gets `auth=` prefixed when pasted bare).
- * Empty/absent fields are left untouched; pass `null` to clear a field.
+ * Write the API key into the config file (preserving any other fields), chmod
+ * 600, and return the updated masked view. The value is normalized like env
+ * input. An absent field is left untouched; pass `null` to clear it.
  */
-export function writeConfigFile(partial: {
-  cookie?: string | null
-  workspaceID?: string | null
-}): MaskedConfigView {
+export function writeConfigFile(partial: { apiKey?: string | null }): MaskedConfigView {
   const file = readFileConfig() ?? {}
   const next: Record<string, unknown> = { ...file }
-  if (partial.workspaceID !== undefined) {
-    const v = typeof partial.workspaceID === 'string' ? partial.workspaceID.trim() : ''
-    if (v.length > 0) next.workspaceID = v
-    else delete next.workspaceID
-  }
-  if (partial.cookie !== undefined) {
-    const v = typeof partial.cookie === 'string' ? normalizeCookie(partial.cookie) : undefined
-    if (v !== undefined && v.length > 0) next.cookie = v
-    else delete next.cookie
+  if (partial.apiKey !== undefined) {
+    const v = typeof partial.apiKey === 'string' ? normalizeApiKey(partial.apiKey) : undefined
+    if (v !== undefined && v.length > 0) next.apiKey = v
+    else delete next.apiKey
   }
   const path = configFilePath()
   try {
@@ -133,8 +128,7 @@ export function writeConfigFile(partial: {
     return maskedConfigView()
   }
   return {
-    workspaceID: maskSecret(typeof next.workspaceID === 'string' ? next.workspaceID : undefined),
-    cookie: maskSecret(typeof next.cookie === 'string' ? next.cookie : undefined),
+    apiKey: maskSecret(typeof next.apiKey === 'string' ? next.apiKey : undefined),
   }
 }
 
@@ -155,67 +149,28 @@ function readFileConfig(): FileConfig | null {
 
 // --- helpers ---
 
+/**
+ * Normalize a user-provided OpenCode Go API key.
+ *
+ * Accepts a bare key (`sk-...`), a quoted key, and an `Authorization` header
+ * value (`Bearer sk-...`), because those are the three shapes that get pasted
+ * into the Set field or exported into a shell profile. Whitespace and
+ * newlines are stripped; an empty result means "not configured".
+ */
+export function normalizeApiKey(input: string | undefined): string | undefined {
+  if (!input) return undefined
+  let value = input.trim().replace(/^["']|["']$/g, '').trim()
+  // `Bearer <key>` is the shape an Authorization header copy-pastes as. A
+  // bare `Bearer` with nothing after it carries no key at all, so it must
+  // normalize to "unset" rather than to the literal word.
+  value = value.replace(/^Bearer\b\s*/i, '').trim()
+  return value.length > 0 ? value : undefined
+}
+
 function pickString(envVal: string | undefined, fileVal: string | undefined): string | undefined {
   if (envVal && envVal.length > 0) return envVal
   if (fileVal && fileVal.length > 0) return fileVal
   return undefined
-}
-
-/**
- * Normalize a user-provided cookie string into a valid `Cookie:` header value
- * for the opencode console HTTP request.
- *
- * Accepts, order-independently:
- *  1. Full header: "auth=Fe26.2*...; oc_locale=zh"   (passthrough)
- *  2. Single bare value: "Fe26.2*..."                (auto-prefix "auth=")
- *  3. Two-segment value+locale: "Fe26.2*...; oc_locale=zh"
- *  4. Locale + auth in any order (incl. `oc_locale=zh` BEFORE `auth=`).
- *
- * The original implementation decided "the first segment is the auth value"
- * whenever the string did not start with `auth=`. That silently corrupted
- * real browser cookies like `oc_locale=zh; desktop_promo_dismissed=1;
- * auth=Fe26.2*...` into `auth=oc_locale=zh; ...` — a fake cookie that
- * opencode.ai rejects with a redirect to the login page.
- *
- * Fixes:
- *  - The `auth=` segment is located anywhere in the string, not assumed to
- *    be first.
- *  - If no `auth=` pair and no bare opaque token is present, `undefined` is
- *    returned so the caller REFUSES to persist a broken cookie rather than
- *    fabricating `auth=<locale>`.
- *  - The `oc_locale` is preserved from the pasted cookie (so a zh user keeps
- *    the Chinese console page, which the parser now supports), defaulting to
- *    `en` when absent. Only a well-formed short locale (e.g. `en`, `zh`, `ja`)
- *    is kept; anything malformed falls back to `en`.
- *  - All other segments (UI prefs like `desktop_promo_dismissed`) are
- *    dropped; only the auth token and the locale are ever sent.
- */
-export function normalizeCookie(input: string | undefined): string | undefined {
-  if (!input) return undefined
-  const trimmed = input.trim()
-  if (!trimmed) return undefined
-
-  const segments = trimmed.split(/[;,]/).map((s) => s.trim()).filter(Boolean)
-
-  // 1) Auth token — order-independent.
-  let auth = segments.find((s) => /^auth=/i.test(s))
-  if (auth === undefined) {
-    // A bare token (no "=") that looks like an opaque auth value.
-    const bare = segments.find((s) => !s.includes('=') && s.length >= 8)
-    if (bare !== undefined) auth = `auth=${bare}`
-  }
-  if (auth === undefined) return undefined
-
-  const authValue = auth.slice(auth.indexOf('=') + 1).trim().replace(/^"|"$/g, '')
-  if (authValue.length === 0) return undefined
-
-  // 2) Locale — preserve the pasted one (the zh parser understands zh pages),
-  //    fall back to `en` when absent or malformed.
-  const localeSeg = segments.find((s) => /^oc_locale=/i.test(s))
-  const rawLocale = localeSeg ? localeSeg.slice(localeSeg.indexOf('=') + 1).trim() : ''
-  const locale = /^[A-Za-z]{2,3}$/.test(rawLocale) ? rawLocale.toLowerCase() : 'en'
-
-  return `auth=${authValue}; oc_locale=${locale}`
 }
 
 function pickNumber(

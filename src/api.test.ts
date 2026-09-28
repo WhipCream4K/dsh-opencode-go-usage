@@ -1,166 +1,205 @@
 /**
- * Unit tests for the SSR usage page parser.
+ * Unit tests for the OpenCode Go quota API client (API-key path).
  * @module dsh-ocgo-usage/api.test
  */
 
-import { describe, expect, it } from 'vitest'
-import { fromSSRHTML, parseDurationToSec } from './api.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { UsageError, fetchUsage, fetchViaApiKey, parseResetInSec, parseUsageBody } from './api.ts'
+import type { OcgoConfig } from './types.ts'
 
-/** A full opencode.ai SSR usage page with all three windows. */
-const FULL_PAGE = `
-<!doctype html>
-<html><head><title>OpenCode</title></head><body>
-<div data-slot="usage-header">OpenCode Go</div>
-<div data-slot="usage-item">
-  <div data-slot="usage-header"><span data-slot="usage-label">Rolling Usage</span></div>
-  <span data-slot="usage-value"><!--$-->23<!--/-->%</span>
-  <span data-slot="reset-time"><!--$-->Resets in<!--/-->2 hours 29 minutes<!--/--></span>
-</div>
-<div data-slot="usage-item">
-  <span data-slot="usage-label">Weekly Usage</span>
-  <span data-slot="usage-value"><!--$-->80<!--/-->%</span>
-  <span data-slot="reset-time"><!--$-->Resets in<!--/-->4 days 6 hours<!--/--></span>
-</div>
-<div data-slot="usage-item">
-  <span data-slot="usage-label">Monthly Usage</span>
-  <span data-slot="usage-value"><!--$-->100<!--/-->%</span>
-  <span data-slot="reset-time"><!--$-->Resets in<!--/-->12 days 4 hours<!--/--></span>
-</div>
-</body></html>
-`
+const CFG: OcgoConfig = {
+  apiKey: 'sk-test-key',
+  baseUrl: 'https://opencode.ai',
+  cacheTTL: 300,
+  timeoutMs: 5_000,
+}
 
-describe('fromSSRHTML', () => {
-  it('parses all three windows with percent and reset seconds', () => {
-    const parsed = fromSSRHTML(FULL_PAGE)
-    expect(parsed.rolling).toEqual({
-      kind: 'rolling',
-      percent: 23,
-      resetInSec: 2 * 3600 + 29 * 60,
-      status: 'ok',
-    })
-    expect(parsed.weekly).toEqual({
-      kind: 'weekly',
-      percent: 80,
-      resetInSec: 4 * 86400 + 6 * 3600,
-      status: 'ok',
-    })
-    expect(parsed.monthly).toEqual({
-      kind: 'monthly',
-      percent: 100,
-      resetInSec: 12 * 86400 + 4 * 3600,
-      status: 'rate-limited',
-    })
+/** Fixed "now" so the derived countdowns are deterministic. */
+const NOW = Date.parse('2026-09-28T18:00:00.000Z')
+
+/** The live response shape, as observed from `GET /zen/go/v1/usage`. */
+const OK_BODY = {
+  usage: {
+    rolling: { status: 'ok', percent: 10, resetsAt: '2026-09-28T20:28:02.440Z' },
+    weekly: { status: 'ok', percent: 4, resetsAt: '2026-10-05T00:00:00.000Z' },
+    monthly: { status: 'ok', percent: 52, resetsAt: '2026-10-21T07:41:16.000Z' },
+  },
+}
+
+/** JSON Response helper for the mocked global fetch. */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
   })
+}
 
-  it('omits missing windows (new account / trial outside window)', () => {
-    const page = `
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">Weekly Usage</span>
-        <span data-slot="usage-value"><!--$-->10<!--/-->%</span>
-        <span data-slot="reset-time"><!--$-->Resets in<!--/-->1 day<!--/--></span>
-      </div>`
-    const parsed = fromSSRHTML(page)
-    expect(parsed.rolling).toBeUndefined()
-    expect(parsed.weekly).toEqual({
-      kind: 'weekly',
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('parseUsageBody', () => {
+  it('maps the three windows and derives resetInSec from resetsAt', () => {
+    const parsed = parseUsageBody(OK_BODY, NOW)
+    expect(parsed).toBeDefined()
+    expect(parsed?.rolling).toEqual({
+      kind: 'rolling',
       percent: 10,
-      resetInSec: 86400,
+      resetInSec: 2 * 3600 + 28 * 60 + 2,
       status: 'ok',
     })
-    expect(parsed.monthly).toBeUndefined()
+    expect(parsed?.weekly?.percent).toBe(4)
+    expect(parsed?.monthly?.percent).toBe(52)
   })
 
-  it('returns an empty result for a login-redirect page', () => {
-    const parsed = fromSSRHTML('<html><body>Sign in to continue</body></html>')
-    expect(parsed.rolling).toBeUndefined()
-    expect(parsed.weekly).toBeUndefined()
-    expect(parsed.monthly).toBeUndefined()
+  it('ignores unknown keys so a grown API keeps working', () => {
+    const parsed = parseUsageBody(
+      { usage: { ...OK_BODY.usage, daily: { status: 'ok', percent: 1, resetsAt: '' }, extra: 7 } },
+      NOW,
+    )
+    expect(Object.keys(parsed ?? {}).sort()).toEqual(['monthly', 'rolling', 'weekly'])
   })
 
-  it('ignores unknown usage labels', () => {
-    const page = `
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">Something Else</span>
-        <span data-slot="usage-value"><!--$-->50<!--/-->%</span>
-      </div>`
-    const parsed = fromSSRHTML(page)
-    expect(parsed.rolling).toBeUndefined()
-    expect(parsed.weekly).toBeUndefined()
-    expect(parsed.monthly).toBeUndefined()
+  it('tolerates a partial body (only some windows present)', () => {
+    const parsed = parseUsageBody({ usage: { weekly: OK_BODY.usage.weekly } }, NOW)
+    expect(parsed?.weekly?.percent).toBe(4)
+    expect(parsed?.rolling).toBeUndefined()
+    expect(parsed?.monthly).toBeUndefined()
   })
 
-  it('clamps percent into [0, 100]', () => {
-    const page = `
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">Monthly Usage</span>
-        <span data-slot="usage-value"><!--$-->150<!--/-->%</span>
-      </div>`
-    const parsed = fromSSRHTML(page)
-    expect(parsed.monthly?.percent).toBe(100)
+  it('returns undefined when no window is recognizable', () => {
+    expect(parseUsageBody({ usage: {} }, NOW)).toBeUndefined()
+    expect(parseUsageBody({ usage: { rolling: { percent: 'ten' } } }, NOW)).toBeUndefined()
+    expect(parseUsageBody({}, NOW)).toBeUndefined()
+    expect(parseUsageBody(null, NOW)).toBeUndefined()
+    expect(parseUsageBody({ usage: 'nope' }, NOW)).toBeUndefined()
   })
 
-  it('parses a zh-locale page (Chinese labels and reset phrases)', () => {
-    const zhPage = `
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">滚动用量</span>
-        <span data-slot="usage-value"><!--$-->27<!--/-->%</span>
-        <span data-slot="reset-time"><!--$-->重置于<!--/-->3 小时 37 分钟<!--/--></span>
-      </div>
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">每周用量</span>
-        <span data-slot="usage-value"><!--$-->15<!--/-->%</span>
-        <span data-slot="reset-time"><!--$-->重置于<!--/-->6 天 15 小时<!--/--></span>
-      </div>
-      <div data-slot="usage-item">
-        <span data-slot="usage-label">每月用量</span>
-        <span data-slot="usage-value"><!--$-->20<!--/-->%</span>
-        <span data-slot="reset-time"><!--$-->重置于<!--/-->15 天 17 小时<!--/--></span>
-      </div>`
-    const parsed = fromSSRHTML(zhPage)
-    expect(parsed.rolling).toEqual({
-      kind: 'rolling',
-      percent: 27,
-      resetInSec: 3 * 3600 + 37 * 60,
-      status: 'ok',
-    })
-    expect(parsed.weekly).toEqual({
-      kind: 'weekly',
-      percent: 15,
-      resetInSec: 6 * 86400 + 15 * 3600,
-      status: 'ok',
-    })
-    expect(parsed.monthly).toEqual({
-      kind: 'monthly',
-      percent: 20,
-      resetInSec: 15 * 86400 + 17 * 3600,
-      status: 'ok',
-    })
+  it('treats a non-ok status as rate-limited', () => {
+    const parsed = parseUsageBody(
+      { usage: { rolling: { status: 'rate_limited', percent: 100, resetsAt: '' } } },
+      NOW,
+    )
+    expect(parsed?.rolling?.status).toBe('rate-limited')
+  })
+
+  it('treats a reported 100% as rate-limited even when status still says ok', () => {
+    const parsed = parseUsageBody(
+      { usage: { rolling: { status: 'ok', percent: 100, resetsAt: '' } } },
+      NOW,
+    )
+    expect(parsed?.rolling?.status).toBe('rate-limited')
+  })
+
+  it('clamps out-of-range percentages', () => {
+    const parsed = parseUsageBody(
+      {
+        usage: {
+          rolling: { status: 'ok', percent: 250, resetsAt: '' },
+          weekly: { status: 'ok', percent: -3, resetsAt: '' },
+        },
+      },
+      NOW,
+    )
+    expect(parsed?.rolling?.percent).toBe(100)
+    expect(parsed?.weekly?.percent).toBe(0)
   })
 })
 
-describe('parseDurationToSec', () => {
-  it.each([
-    ['2 hours 29 minutes', 2 * 3600 + 29 * 60],
-    ['45 minutes', 45 * 60],
-    ['5 days', 5 * 86400],
-    ['30 seconds', 30],
-    ['1 week', 604800],
-    ['1 month', 2592000],
-    ['1 year', 31536000],
-    ['2 小时 29 分钟', 2 * 3600 + 29 * 60],
-    ['45 分钟', 45 * 60],
-    ['5 天', 5 * 86400],
-    ['30 秒', 30],
-    ['1 周', 604800],
-    ['1 个月', 2592000],
-    ['1 年', 31536000],
-    ['', 0],
-    ['garbage text', 0],
-  ])('parses %j → %i', (phrase, expected) => {
-    expect(parseDurationToSec(phrase)).toBe(expected)
+describe('parseResetInSec', () => {
+  it('converts an ISO stamp into seconds from now', () => {
+    expect(parseResetInSec('2026-09-28T19:00:00.000Z', NOW)).toBe(3600)
   })
 
-  it('handles embedded SolidStart comment markers', () => {
-    expect(parseDurationToSec('2<!--/--> hours 29<!--/--> minutes')).toBe(2 * 3600 + 29 * 60)
+  it('never returns a negative countdown for a stamp already past', () => {
+    expect(parseResetInSec('2026-09-28T17:00:00.000Z', NOW)).toBe(0)
+  })
+
+  it('returns 0 for absent or unparseable stamps', () => {
+    expect(parseResetInSec(undefined, NOW)).toBe(0)
+    expect(parseResetInSec('', NOW)).toBe(0)
+    expect(parseResetInSec('not-a-date', NOW)).toBe(0)
+    expect(parseResetInSec(42, NOW)).toBe(0)
+  })
+})
+
+describe('fetchViaApiKey', () => {
+  it('calls the official quota endpoint with a Bearer API key', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(OK_BODY))
+    await fetchViaApiKey(CFG, NOW)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://opencode.ai/zen/go/v1/usage')
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test-key')
+    // The cookie/workspace shape must be gone entirely.
+    expect(url).not.toContain('workspace')
+    expect(init.headers).not.toHaveProperty('Cookie')
+  })
+
+  it('honours a custom base URL and tolerates a trailing slash', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(OK_BODY))
+    await fetchViaApiKey({ ...CFG, baseUrl: 'https://example.test/' }, NOW)
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://example.test/zen/go/v1/usage')
+  })
+
+  it('throws noconfig without an API key, without calling the network', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(OK_BODY))
+    await expect(fetchViaApiKey({ ...CFG, apiKey: undefined }, NOW)).rejects.toMatchObject({
+      code: 'noconfig',
+    })
+    await expect(fetchViaApiKey({ ...CFG, apiKey: '   ' }, NOW)).rejects.toMatchObject({
+      code: 'noconfig',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('maps 401/403 to an apikey error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 401 }))
+    const error = await fetchViaApiKey(CFG, NOW).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(UsageError)
+    expect((error as UsageError).code).toBe('apikey')
+  })
+
+  it('maps other HTTP failures to http<status>', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('boom', { status: 500 }))
+    await expect(fetchViaApiKey(CFG, NOW)).rejects.toMatchObject({ code: 'http500' })
+  })
+
+  it('maps a non-JSON body to a parse error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html>sign in</html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+    )
+    await expect(fetchViaApiKey(CFG, NOW)).rejects.toMatchObject({ code: 'parse' })
+  })
+
+  it('maps an empty usage object to an empty error rather than a silent success', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ usage: {} }))
+    await expect(fetchViaApiKey(CFG, NOW)).rejects.toMatchObject({ code: 'empty' })
+  })
+
+  it('maps an aborted request to a timeout error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      Object.assign(new Error('aborted'), { name: 'AbortError' }),
+    )
+    await expect(fetchViaApiKey(CFG, NOW)).rejects.toMatchObject({ code: 'timeout' })
+  })
+
+  it('maps a transport failure to a fetch error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
+    await expect(fetchViaApiKey(CFG, NOW)).rejects.toMatchObject({ code: 'fetch' })
+  })
+})
+
+describe('fetchUsage', () => {
+  it('stamps updatedAt on the parsed windows', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(OK_BODY))
+    const data = await fetchUsage(CFG)
+    expect(data.updatedAt).toBeTypeOf('number')
+    expect(data.rolling?.percent).toBe(10)
+    expect(data.weekly?.percent).toBe(4)
+    expect(data.monthly?.percent).toBe(52)
   })
 })

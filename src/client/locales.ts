@@ -10,7 +10,9 @@ export const NS = 'ocgo'
 export const zh = {
   'ocgo.unavailable': '用量不可用',
   'ocgo.error': '查询失败：{code}',
-  'ocgo.noconfig': '未配置：请设置 OPENCODE_GO_COOKIE 与 OPENCODE_GO_WORKSPACE_ID（或 $DSH_HOME/ocgo-usage.json）',
+  'ocgo.noconfig': '未配置：请设置 OPENCODE_GO_API_KEY（环境变量、$DSH_HOME/.credentials.yaml 或 $DSH_HOME/ocgo-usage.json）',
+  'ocgo.apikey': 'API Key 无效或已过期',
+  'ocgo.empty': '返回中没有可用用量数据',
   'ocgo.refresh': '刷新',
   'ocgo.fetchedAt': 'upd {time}',
   'ocgo.rolling': '5h 滚动',
@@ -23,8 +25,8 @@ export const zh = {
   'ocgo.sep': '·',
   'ocgo.set': '设置',
   'ocgo.save': '保存',
-  'ocgo.workspaceID': 'workspace id',
-  'ocgo.cookie': 'cookie',
+  'ocgo.apiKeyLabel': 'OpenCode Go API Key',
+  'ocgo.configured': '已配置 — 输入新 Key 可替换',
   'ocgo.setHint': '点击外部或按 Esc 保存',
 } as const
 
@@ -32,7 +34,9 @@ export const zh = {
 export const en = {
   'ocgo.unavailable': 'usage unavailable',
   'ocgo.error': 'Query failed: {code}',
-  'ocgo.noconfig': 'Not configured: set OPENCODE_GO_COOKIE and OPENCODE_GO_WORKSPACE_ID (or $DSH_HOME/ocgo-usage.json)',
+  'ocgo.noconfig': 'Not configured: set OPENCODE_GO_API_KEY (env, $DSH_HOME/.credentials.yaml, or $DSH_HOME/ocgo-usage.json)',
+  'ocgo.apikey': 'API key invalid or expired',
+  'ocgo.empty': 'Response carried no usable usage data',
   'ocgo.refresh': 'Refresh',
   'ocgo.fetchedAt': 'upd {time}',
   'ocgo.rolling': '5h Rolling',
@@ -45,8 +49,8 @@ export const en = {
   'ocgo.sep': '·',
   'ocgo.set': 'Set',
   'ocgo.save': 'Save',
-  'ocgo.workspaceID': 'workspace id',
-  'ocgo.cookie': 'cookie',
+  'ocgo.apiKeyLabel': 'OpenCode Go API Key',
+  'ocgo.configured': 'configured — type a new key to replace',
   'ocgo.setHint': 'click outside or press Esc to save',
 } as const
 

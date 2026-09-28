@@ -1,18 +1,33 @@
 /**
- * HTTP fetch + response adapters for dsh-ocgo-usage
+ * OpenCode Go quota API client for dsh-ocgo-usage.
  *
- * Cookie path (current): GET /workspace/<wrk>/go HTML SSR scrape.
- * The opencode.ai dashboard renders usage values inline in
- * `data-slot="usage-item"` blocks; this is the only cookie-authenticated
- * way to read usage today. (The proposed official API from
- * anomalyco/opencode#16513 is not merged yet; when it ships, an apikey
- * path can be added behind the same `NormalizedUsage` shape.)
+ * The official quota endpoint is
+ * `GET <baseUrl>/zen/go/v1/usage`, authenticated with the regular OpenCode Go
+ * API key (`Authorization: Bearer <key>`) — the same key the `opencode-go`
+ * model provider uses. No workspace id and no web-session cookie are involved,
+ * so there is no SSR scraping and no locale-specific label parsing: the
+ * response is JSON and identical for every UI language.
  *
- * Adapted from pi-ocgo-usage/src/api.ts.
+ * The response shape is:
+ *
+ * ```json
+ * {
+ *   "usage": {
+ *     "rolling": { "status": "ok", "percent": 4, "resetsAt": "2026-09-28T20:28:02.440Z" },
+ *     "weekly":  { "status": "ok", "percent": 3, "resetsAt": "2026-10-05T00:00:00.000Z" },
+ *     "monthly": { "status": "ok", "percent": 1, "resetsAt": "2026-10-21T07:41:16.000Z" }
+ *   }
+ * }
+ * ```
+ *
+ * Unknown fields are tolerated (the API may grow), but a body without any
+ * recognizable window is rejected loudly so a silently-broken monitor never
+ * masquerades as a healthy one.
  * @module dsh-ocgo-usage/api
  */
 
-import type { NormalizedUsage, OcgoConfig, UsageWindow, UsageWindowKind } from './types.ts'
+import { usageEndpoint } from './config.ts'
+import type { NormalizedUsage, OcgoConfig, UsageStatus, UsageWindow, UsageWindowKind } from './types.ts'
 
 // ============================================================================
 // Errors
@@ -33,28 +48,46 @@ export class UsageError extends Error {
 // HTTP wrapper
 // ============================================================================
 
-/** Text fetch with structured errors (cookie SSR path). */
-async function safeFetchText(url: string, headers: Record<string, string>, timeoutMs: number): Promise<string> {
+/** Fetch the quota endpoint and decode its JSON body. */
+async function safeFetchJson(
+  url: string,
+  apiKey: string,
+  timeoutMs: number,
+): Promise<unknown> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res: Response
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method: 'GET',
-      headers,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
       signal: controller.signal,
     })
-    if (!res.ok) {
-      throw new UsageError(`HTTP ${res.status} for ${sanitizeUrl(url)}`, `http${res.status}`)
-    }
-    return await res.text()
   } catch (e) {
-    if (e instanceof UsageError) throw e
     if (e instanceof Error && e.name === 'AbortError') {
       throw new UsageError(`Request timed out after ${timeoutMs}ms`, 'timeout')
     }
     throw new UsageError(String(e instanceof Error ? e.message : e), 'fetch')
   } finally {
     clearTimeout(timer)
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    throw new UsageError(
+      `OpenCode Go rejected the API key (HTTP ${res.status})`,
+      'apikey',
+    )
+  }
+  if (!res.ok) {
+    throw new UsageError(`HTTP ${res.status} for ${sanitizeUrl(url)}`, `http${res.status}`)
+  }
+  try {
+    return (await res.json()) as unknown
+  } catch {
+    throw new UsageError('OpenCode Go returned a body that is not JSON', 'parse')
   }
 }
 
@@ -69,172 +102,104 @@ function sanitizeUrl(url: string): string {
 }
 
 // ============================================================================
-// Cookie path: GET /workspace/<wrk>/go (SSR HTML scrape)
+// API-key path: GET /zen/go/v1/usage (JSON)
 // ============================================================================
 
-interface SSRUsageItem {
-  readonly label: string
-  readonly percent: number
-  readonly resetsIn: string
-}
+/** Recognized quota window keys, in display order. */
+export const WINDOW_KEYS = ['rolling', 'weekly', 'monthly'] as const
 
-/** Fetch usage through the cookie path. Throws UsageError on any failure. */
-export async function fetchViaCookie(cfg: OcgoConfig): Promise<Omit<NormalizedUsage, 'updatedAt'>> {
-  if (!cfg.cookie || !cfg.workspaceID) {
-    throw new UsageError('Missing cookie or workspaceID for cookie path', 'noconfig')
+/**
+ * Fetch usage through the API-key path. Throws UsageError on any failure.
+ * @param cfg - resolved config carrying the API key, base URL and timeout.
+ * @param now - epoch ms used to derive each window's reset countdown.
+ */
+export async function fetchViaApiKey(
+  cfg: OcgoConfig,
+  now: number = Date.now(),
+): Promise<Omit<NormalizedUsage, 'updatedAt'>> {
+  const apiKey = cfg.apiKey?.trim()
+  if (apiKey === undefined || apiKey.length === 0) {
+    throw new UsageError('Missing OpenCode Go API key for the usage endpoint', 'noconfig')
   }
-  const url = `${cfg.baseUrl}/workspace/${encodeURIComponent(cfg.workspaceID)}/go`
-  const html = await safeFetchText(
-    url,
-    { Cookie: cfg.cookie, Accept: 'text/html' },
-    cfg.timeoutMs,
-  )
-  const parsed = fromSSRHTML(html)
-  // The page 302-redirects to the login page when the cookie is invalid;
-  // that page parses as empty, which is indistinguishable from "no windows".
-  // Only report success when at least one window was found.
-  if (parsed.rolling === undefined && parsed.weekly === undefined && parsed.monthly === undefined) {
-    throw new UsageError('Usage page parsed empty (cookie expired or invalid?)', 'http302')
+  const body = await safeFetchJson(usageEndpoint(cfg), apiKey, cfg.timeoutMs)
+  const parsed = parseUsageBody(body, now)
+  // A 200 with no recognizable window is indistinguishable from "no Go
+  // subscription"; only report success when at least one window was found.
+  if (parsed === undefined) {
+    throw new UsageError(
+      'Response carried no usable usage data (usage.rolling/weekly/monthly all missing)',
+      'empty',
+    )
   }
   return parsed
 }
 
 /**
- * Parse the opencode console SSR HTML page and extract the three usage
- * windows. Reset times are emitted as English phrases inside
- * `data-slot="reset-time"` (e.g. "Resets in 2 hours 29 minutes"). We parse
- * them into a coarse `resetInSec` estimate; precise second-level resets are
- * not needed for display.
+ * Normalize a `/zen/go/v1/usage` response body into window records.
+ * @param body - parsed JSON payload.
+ * @param now - epoch ms used to derive each window's reset countdown.
+ * @returns the recognized windows, or `undefined` when none are usable.
  */
-export function fromSSRHTML(html: string): Omit<NormalizedUsage, 'updatedAt'> {
-  // Each usage-item is a `<div data-slot="usage-item">...</div>` block, but
-  // the markup inside may itself contain nested divs (usage-header,
-  // progress bar, ...). Instead of trying to find the block's closing tag
-  // with a regex, we slice between consecutive item start tags — that keeps
-  // the whole block (including any nested divs) in one piece.
-  const itemStartRe = /<div[^>]*data-slot="usage-item"/g
-  const starts: number[] = []
-  let startMatch = itemStartRe.exec(html)
-  while (startMatch !== null) {
-    starts.push(startMatch.index)
-    startMatch = itemStartRe.exec(html)
-  }
-
-  const items: SSRUsageItem[] = []
-  for (let i = 0; i < starts.length; i++) {
-    const block = html.slice(starts[i], starts[i + 1] ?? html.length)
-    const labelMatch = block.match(/data-slot="usage-label"[^>]*>([^<]+)</)
-    const valueMatch = block.match(/data-slot="usage-value"[\s\S]*?<!--\$-->\s*(\d+)\s*<!--\/-->/)
-    // The page renders the reset phrase in the UI locale — "Resets in"
-    // (en) or "重置于" (zh) — so accept both.
-    const resetMatch = block.match(
-      /data-slot="reset-time"[\s\S]*?(?:Resets in|重置于)(?:<!--\/-->\s*)?([\s\S]*?)(?:<!--\/-->|<\/span>)/,
-    )
-    if (!labelMatch || !valueMatch) continue
-    const label = labelMatch[1]?.trim() ?? ''
-    const percent = Number.parseInt(valueMatch[1] ?? '0', 10)
-    const resetsIn = resetMatch ? stripHtmlComments(resetMatch[1] ?? '').trim() : ''
-    items.push({ label, percent, resetsIn })
-  }
-
-  const result: {
+export function parseUsageBody(
+  body: unknown,
+  now: number = Date.now(),
+): Omit<NormalizedUsage, 'updatedAt'> | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const usage = (body as { usage?: unknown }).usage
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const record = usage as Record<string, unknown>
+  const out: {
     rolling?: UsageWindow
     weekly?: UsageWindow
     monthly?: UsageWindow
   } = {}
-  for (const item of items) {
-    const kind = labelToKind(item.label)
-    if (!kind) continue
-    result[kind] = {
-      kind,
-      percent: clampPercent(item.percent),
-      resetInSec: parseDurationToSec(item.resetsIn),
-      status: item.percent >= 100 ? 'rate-limited' : 'ok',
-    }
+  for (const key of WINDOW_KEYS) {
+    const window = parseWindow(key, record[key], now)
+    if (window !== undefined) out[key] = window
   }
-  return result
+  return out.rolling !== undefined || out.weekly !== undefined || out.monthly !== undefined
+    ? out
+    : undefined
 }
 
-function labelToKind(label: string): UsageWindowKind | undefined {
-  const lower = label.toLowerCase()
-  // English labels ("Rolling Usage", "Weekly Usage", "Monthly Usage").
-  if (lower.startsWith('rolling')) return 'rolling'
-  if (lower.startsWith('weekly')) return 'weekly'
-  if (lower.startsWith('monthly')) return 'monthly'
-  // Chinese labels rendered for zh locale ("滚动用量", "每周用量", "每月用量").
-  if (lower.startsWith('滚动')) return 'rolling'
-  if (lower.startsWith('每周')) return 'weekly'
-  if (lower.startsWith('每月')) return 'monthly'
-  return undefined
-}
-
-/** Strip SolidStart HTML comments `<!-- ... -->` from a string. */
-function stripHtmlComments(s: string): string {
-  return s.replace(/<!--[\s\S]*?-->/g, '').trim()
+/** Validate one window record; returns `undefined` when malformed. */
+function parseWindow(
+  kind: UsageWindowKind,
+  value: unknown,
+  now: number,
+): UsageWindow | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.percent !== 'number' || !Number.isFinite(record.percent)) return undefined
+  const percent = clampPercent(record.percent)
+  return {
+    kind,
+    percent,
+    resetInSec: parseResetInSec(record.resetsAt, now),
+    status: parseStatus(record.status, percent),
+  }
 }
 
 /**
- * Parse a human duration phrase into seconds. Examples (English plus the
- * Chinese renderings used by the zh locale):
- *   "2 hours 29 minutes" → 8940      "2 小时 29 分钟" → 8940
- *   "45 minutes"          → 2700     "45 分钟"         → 2700
- *   "5 days"              → 432000   "5 天"            → 432000
- *   "30 seconds"          → 30       "30 秒"           → 30
- *   "1 week"              → 604800   "1 周"            → 604800
- *   "1 month"             → 2592000  "1 个月"          → 2592000
- *   "1 year"              → 31536000 "1 年"            → 31536000
- *
- * Returns 0 on unrecognized input.
+ * Map the API's window status onto the two states the chip renders. Anything
+ * other than `ok` means the window is spent; a window reported at 100% is
+ * treated as spent even when the status field still says `ok`.
  */
-export function parseDurationToSec(phrase: string): number {
-  if (!phrase) return 0
-  // Defensive: SolidStart may leave `<!--/-->` markers inside the captured
-  // reset phrase; strip them before matching (see stripHtmlComments).
-  const cleaned = phrase.replace(/<!--[\s\S]*?-->/g, ' ')
-  const p = cleaned.trim().replace(/\s+/g, ' ').toLowerCase()
-  if (!p) return 0
+function parseStatus(raw: unknown, percent: number): UsageStatus {
+  if (typeof raw === 'string' && raw.toLowerCase() !== 'ok') return 'rate-limited'
+  return percent >= 100 ? 'rate-limited' : 'ok'
+}
 
-  const re = /(\d+)\s*(?:个\s*)?(second|minute|hour|day|week|month|year|秒|分钟|小时|天|周|月|年)s?/g
-  let total = 0
-  let matched = false
-  let m = re.exec(p)
-  while (m !== null) {
-    const n = Number.parseInt(m[1] ?? '0', 10)
-    const unit = m[2] ?? ''
-    matched = true
-    switch (unit) {
-      case 'second':
-      case '秒':
-        total += n
-        break
-      case 'minute':
-      case '分钟':
-        total += n * 60
-        break
-      case 'hour':
-      case '小时':
-        total += n * 3600
-        break
-      case 'day':
-      case '天':
-        total += n * 86400
-        break
-      case 'week':
-      case '周':
-        total += n * 604800
-        break
-      case 'month':
-      case '月':
-        total += n * 2592000 // 30 days; coarse but adequate for display
-        break
-      case 'year':
-      case '年':
-        total += n * 31536000
-        break
-    }
-    m = re.exec(p)
-  }
-  return matched ? total : 0
+/**
+ * Convert an ISO-8601 `resetsAt` stamp into seconds from `now`.
+ * Returns 0 when the stamp is absent, unparseable, or already in the past —
+ * the UI renders that as "resets now" rather than a negative countdown.
+ */
+export function parseResetInSec(resetsAt: unknown, now: number = Date.now()): number {
+  if (typeof resetsAt !== 'string' || resetsAt.length === 0) return 0
+  const at = Date.parse(resetsAt)
+  if (!Number.isFinite(at)) return 0
+  return Math.max(0, Math.round((at - now) / 1000))
 }
 
 // ============================================================================
@@ -242,19 +207,20 @@ export function parseDurationToSec(phrase: string): number {
 // ============================================================================
 
 /**
- * Fetch usage with the current config (cookie path only today) and stamp
- * the fetch timestamp so the UI can show data freshness.
+ * Fetch usage with the current config and stamp the fetch timestamp so the UI
+ * can show data freshness.
+ * @param cfg - resolved config (must carry the API key).
  */
 export async function fetchUsage(cfg: OcgoConfig): Promise<NormalizedUsage> {
-  const data = await fetchViaCookie(cfg)
-  return { ...data, updatedAt: Date.now() }
+  const now = Date.now()
+  const data = await fetchViaApiKey(cfg, now)
+  return { ...data, updatedAt: now }
 }
 
 // ============================================================================
 // Internal helpers
 // ============================================================================
 
-function clampPercent(n: number | undefined): number {
-  if (n === undefined) return 0
+function clampPercent(n: number): number {
   return Math.max(0, Math.min(100, Math.floor(n)))
 }

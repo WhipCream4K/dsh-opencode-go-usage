@@ -3,9 +3,9 @@
  * composer tool row (`conversation.input.right`) next to the model selector.
  * The chip polls the host `/api/ocgo-usage` endpoint for the three usage
  * windows (rolling 5h / weekly / monthly);
- * clicking reveals per-window reset countdowns, a Set editor (masked
- * workspace/cookie) and a manual refresh. In the error state, clicking the
- * chip opens the Set editor directly so a stale credential can be replaced in
+ * clicking reveals per-window reset countdowns, a Set editor (masked API key)
+ * and a manual refresh. In the error state, clicking the
+ * chip opens the Set editor directly so a stale key can be replaced in
  * place.
  * @module dsh-ocgo-usage/client/OcgoDockEntry
  */
@@ -27,7 +27,18 @@ const MASK = '••••'
 async function ocgoFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
-    throw new Error(`ocgo-usage ${path} failed: ${response.status}`)
+    // The host answers failures with a JSON detail; surface it so a refused
+    // write explains itself instead of showing a bare status code.
+    let detail = ''
+    try {
+      const body = (await response.json()) as { error?: unknown; message?: unknown }
+      detail = typeof body.message === 'string'
+        ? body.message
+        : typeof body.error === 'string' ? body.error : ''
+    } catch {
+      // Non-JSON failure body; fall back to the status code.
+    }
+    throw new Error(detail.length > 0 ? detail : `ocgo-usage ${path} failed: ${response.status}`)
   }
   return (await response.json()) as T
 }
@@ -37,7 +48,7 @@ const ocgoApi = {
   view: () => ocgoFetch<OcgoUsageView>('/api/ocgo-usage'),
   refresh: () => ocgoFetch<OcgoUsageView>('/api/ocgo-usage/refresh'),
   config: () => ocgoFetch<MaskedConfigView>('/api/ocgo-usage/config'),
-  writeConfig: (partial: { cookie?: string; workspaceID?: string }) => ocgoFetch<MaskedConfigView>(
+  writeConfig: (partial: { apiKey?: string }) => ocgoFetch<MaskedConfigView>(
     '/api/ocgo-usage/config',
     {
       method: 'POST',
@@ -173,16 +184,17 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
   const [view, setView] = useState<OcgoUsageView | null>(null)
   const [open, setOpen] = useState(false)
   const [visible, setVisible] = useState(true)
-  // Panel mode: 'view' = windows + footer; 'set' = workspace/cookie editor.
+  // Panel mode: 'view' = windows + footer; 'set' = API-key editor.
   const [mode, setMode] = useState<'view' | 'set'>('view')
   const [config, setConfig] = useState<MaskedConfigView | null>(null)
-  const [wsDraft, setWsDraft] = useState('')
-  const [cookieDraft, setCookieDraft] = useState('')
+  const [keyDraft, setKeyDraft] = useState('')
+  // Why the last Set write was refused; shown in place of the save hint.
+  const [writeError, setWriteError] = useState<string | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const modeRef = useRef<'view' | 'set'>('view')
   modeRef.current = mode
-  const draftsRef = useRef({ ws: '', cookie: '' })
-  draftsRef.current = { ws: wsDraft, cookie: cookieDraft }
+  const keyDraftRef = useRef('')
+  keyDraftRef.current = keyDraft
   const configRef = useRef<MaskedConfigView | null>(null)
   configRef.current = config
 
@@ -228,43 +240,36 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
     }
   }, [pollNow])
 
-  /** Load the masked config into the editor drafts. */
+  /** Load the masked config into the editor draft. */
   const loadConfig = useCallback(() => {
+    setWriteError(null)
     ocgoApi.config().then((snapshot) => {
       setConfig(snapshot)
-      setWsDraft(maskedText(snapshot.workspaceID))
-      setCookieDraft(maskedText(snapshot.cookie))
+      setKeyDraft(maskedText(snapshot.apiKey))
     }, () => {
-      // Editor still opens; drafts stay empty.
+      // Editor still opens; the draft stays empty.
       setConfig(null)
-      setWsDraft('')
-      setCookieDraft('')
+      setKeyDraft('')
     })
   }, [])
 
-  /** Submit any edited field; returns the write promise (fire-and-forget on blur). */
+  /** Submit any edited key; returns the write promise (fire-and-forget on blur). */
   const saveConfig = useCallback((): void => {
     const current = configRef.current
-    const partial: { cookie?: string; workspaceID?: string } = {}
-    if (current !== null) {
-      const ws = draftsRef.current.ws.trim()
-      if (ws.length > 0 && ws !== maskedText(current.workspaceID)) partial.workspaceID = ws
-      const cookie = draftsRef.current.cookie.trim()
-      if (cookie.length > 0 && cookie !== maskedText(current.cookie)) partial.cookie = cookie
-    } else {
-      // No baseline loaded (fetch failed): send whatever was typed.
-      if (draftsRef.current.ws.trim().length > 0) partial.workspaceID = draftsRef.current.ws.trim()
-      if (draftsRef.current.cookie.trim().length > 0) partial.cookie = draftsRef.current.cookie.trim()
-    }
-    if (Object.keys(partial).length === 0) return
-    ocgoApi.writeConfig(partial).then((snapshot) => {
+    const typed = keyDraftRef.current.trim()
+    const baseline = current === null ? '' : maskedText(current.apiKey)
+    // The masked tail is what the field shows; an unchanged field must not be
+    // written back as if it were a new key.
+    if (typed.length === 0 || typed === baseline) return
+    ocgoApi.writeConfig({ apiKey: typed }).then((snapshot) => {
       setConfig(snapshot)
-      setWsDraft(maskedText(snapshot.workspaceID))
-      setCookieDraft(maskedText(snapshot.cookie))
-      // New credentials are live now (host invalidated its cache): poll now.
+      setKeyDraft(maskedText(snapshot.apiKey))
+      setWriteError(null)
+      // The new key is live now (host invalidated its cache): poll now.
       pollNow()
-    }, () => {
-      // Ignore; the next poll resyncs and the editor keeps the drafts.
+    }, (error: unknown) => {
+      // Keep the draft so the user can correct it, and say why it failed.
+      setWriteError(error instanceof Error ? error.message : String(error))
     })
   }, [pollNow])
 
@@ -324,7 +329,7 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
       ? { code: view.error, message: view.message ?? t('ocgo.error', { code: view.error }) }
       : null
 
-  // Error state: the chip opens the Set editor directly so a stale cookie can
+  // Error state: the chip opens the Set editor directly so a stale key can
   // be replaced in place; clicking outside (or Esc) confirms the write.
   if (error !== null) {
     return (
@@ -341,31 +346,19 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
           <span className={css.details}>
             <span className={css.setPanel}>
               <label className={css.field}>
-                <span className={css.fieldLabel}>{t('ocgo.workspaceID')}</span>
+                <span className={css.fieldLabel}>{t('ocgo.apiKeyLabel')}</span>
                 <input
                   className={css.fieldInput}
-                  value={wsDraft}
-                  placeholder="wrk_…"
+                  value={keyDraft}
+                  placeholder={config?.apiKey.set === true ? t('ocgo.configured') : 'sk-…'}
                   spellCheck={false}
                   autoComplete="off"
-                  onChange={(e) => { setWsDraft(e.target.value) }}
-                  onFocus={(e) => { if (e.target.value === maskedText(config?.workspaceID)) e.target.select() }}
-                />
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('ocgo.cookie')}</span>
-                <input
-                  className={css.fieldInput}
-                  value={cookieDraft}
-                  placeholder="auth=…"
-                  spellCheck={false}
-                  autoComplete="off"
-                  onChange={(e) => { setCookieDraft(e.target.value) }}
-                  onFocus={(e) => { if (e.target.value === maskedText(config?.cookie)) e.target.select() }}
+                  onChange={(e) => { setKeyDraft(e.target.value) }}
+                  onFocus={(e) => { if (e.target.value === maskedText(config?.apiKey)) e.target.select() }}
                 />
               </label>
               <span className={css.foot}>
-                <span className={css.setHint}>{t('ocgo.setHint')}</span>
+                <span className={css.setHint}>{writeError ?? t('ocgo.setHint')}</span>
                 <button type="button" className={css.refreshBtn} onClick={closePanel}>
                   {t('ocgo.save')}
                 </button>
@@ -423,31 +416,19 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
           {mode === 'set' ? (
             <span className={css.setPanel}>
               <label className={css.field}>
-                <span className={css.fieldLabel}>{t('ocgo.workspaceID')}</span>
+                <span className={css.fieldLabel}>{t('ocgo.apiKeyLabel')}</span>
                 <input
                   className={css.fieldInput}
-                  value={wsDraft}
-                  placeholder="wrk_…"
+                  value={keyDraft}
+                  placeholder={config?.apiKey.set === true ? t('ocgo.configured') : 'sk-…'}
                   spellCheck={false}
                   autoComplete="off"
-                  onChange={(e) => { setWsDraft(e.target.value) }}
-                  onFocus={(e) => { if (e.target.value === maskedText(config?.workspaceID)) e.target.select() }}
-                />
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('ocgo.cookie')}</span>
-                <input
-                  className={css.fieldInput}
-                  value={cookieDraft}
-                  placeholder="auth=…"
-                  spellCheck={false}
-                  autoComplete="off"
-                  onChange={(e) => { setCookieDraft(e.target.value) }}
-                  onFocus={(e) => { if (e.target.value === maskedText(config?.cookie)) e.target.select() }}
+                  onChange={(e) => { setKeyDraft(e.target.value) }}
+                  onFocus={(e) => { if (e.target.value === maskedText(config?.apiKey)) e.target.select() }}
                 />
               </label>
               <span className={css.foot}>
-                <span className={css.setHint}>{t('ocgo.setHint')}</span>
+                <span className={css.setHint}>{writeError ?? t('ocgo.setHint')}</span>
                 <button type="button" className={css.refreshBtn} onClick={closePanel}>
                   {t('ocgo.save')}
                 </button>

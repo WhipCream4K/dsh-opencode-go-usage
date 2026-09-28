@@ -16,19 +16,23 @@
 OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 ```
 
+> **只需要一个 API Key。** 本插件读取 OpenCode 官方配额接口
+> `GET https://opencode.ai/zen/go/v1/usage`，用 `Authorization: Bearer <OPENCODE_GO_API_KEY>`
+> 认证——就是 `opencode-go` 模型 provider 已经在用的那把 key。
+> **不需要 workspace id，也不需要浏览器会话 cookie。**
+
 ## 特性
 
-- **三个窗口** —— 5h 滚动 / 每周 / 每月 的百分比 + 重置倒计时
+- **三个窗口** —— 5h 滚动 / 每周 / 每月 的百分比 + 重置倒计时（由接口返回的 `resetsAt` 换算）
 - **颜色阈值** —— 正常 → 黄色警告（≥80%）→ 红色错误（≥90% 或已限流）
 - **数据新鲜度** —— `upd HH:MM` 显示最近一次成功抓取时间
 - **轻量轮询** —— 每 10s 轮询（切回标签页立即刷新）；host 端 300s 缓存（TTL 可配）+ 60s 失败冷却，不会频繁打扰 opencode.ai
 - **Provider 感知** —— 仅当会话当前模型走 `opencode-go` provider 时显示；每次轮询读取内存中的实时模型选择（会话的 `modelSelection` 投影，不发起网络请求），切到 DeepSeek 官方等其它 provider 后一个轮询周期内自动隐藏，切回自动恢复（与 pi-ocgo-usage 行为一致）
 - **点击展开** —— 详情面板显示每个窗口的重置倒计时，左下角 `Set` 可配置凭据，右侧 `refresh upd HH:MM` 手动刷新
-- **内置凭据编辑器** —— 无需碰终端：`Set` 面板直接修改 workspace id 与 cookie（输入框以 `••••` + 末尾 4 位显示，点击外部 / Esc / 保存确认写入）
-- **优雅降级** —— 配置缺失显示 `<err:noconfig>`，HTTP 失败显示 `<err:httpXXX>`；出错时点击 chip 直接进入 Set 面板
-- **Cookie 只在 host 侧** —— 浏览器只访问同源 `/api/ocgo-usage` JSON 端点，cookie 永不进入页面
-
-> **⚠️ 需要 OpenCode Go 会话 cookie。** 该 cookie 是完整用户会话（不是 API key），可访问你 OpenCode 账户的全部内容。请像对待密码一样对待它——见 [配置](#配置)。
+- **内置凭据编辑器** —— 无需碰终端：`Set` 面板直接写入 API Key（输入框以占位提示表示"已配置"，点击外部 / Esc / 保存确认写入）。写入目标是 DSH 的凭据库（`ctx.credentials`），也就是模型 provider 自己读的那个存储，因此改完立即生效、不需要重启
+- **优雅降级** —— 配置缺失显示 `<err:noconfig>`，key 被拒显示 `<err:apikey>`；出错时点击 chip 直接进入 Set 面板
+- **API Key 只在 host 侧** —— 浏览器只访问同源 `/api/ocgo-usage` JSON 端点，key 永不进入页面
+- **与界面语言无关** —— 接口返回 JSON，不再解析 SSR 页面上的中英文标签，中英文界面结果完全一致
 
 ## 环境要求
 
@@ -44,7 +48,7 @@ OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
 ### 从 GitHub 安装（推荐）
 
 ```sh
-dsh plugin --profile web add github:v587d/dsh-opencode-go-usage
+dsh plugin --profile web add github:WhipCream4K/dsh-opencode-go-usage
 ```
 
 因为 `lib/` 已提交到仓库，pnpm 直接安装构建好的包，不会要求构建脚本授权。
@@ -55,19 +59,19 @@ dsh plugin --profile web add github:v587d/dsh-opencode-go-usage
 dsh plugin --profile web add dsh-ocgo-usage
 ```
 
-> **关于包名：** 仓库名为 `dsh-opencode-go-usage`，但 npm 上同名包已被他人抢先占用（一个功能类似的第三方插件），因此 npm 发布名定为 `dsh-ocgo-usage`。GitHub 安装（推荐）不受影响：`dsh plugin --profile web add github:v587d/dsh-opencode-go-usage`。
+> **关于包名：** 仓库名为 `dsh-opencode-go-usage`，但 npm 上同名包已被他人抢先占用（一个功能类似的第三方插件），因此 npm 发布名定为 `dsh-ocgo-usage`。GitHub 安装（推荐）不受影响。
 
 ### 从 tarball 安装
 
 ```sh
-pnpm pack            # 在本仓库内 → dsh-ocgo-usage-0.1.0.tgz
-dsh plugin --profile web add ./dsh-ocgo-usage-0.1.0.tgz
+pnpm pack            # 在本仓库内 → dsh-ocgo-usage-0.2.0.tgz
+dsh plugin --profile web add ./dsh-ocgo-usage-0.2.0.tgz
 ```
 
 ### 本地开发安装
 
 ```sh
-git clone https://github.com/v587d/dsh-opencode-go-usage.git
+git clone https://github.com/WhipCream4K/dsh-opencode-go-usage.git
 cd dsh-opencode-go-usage
 pnpm install
 pnpm run build
@@ -80,29 +84,29 @@ dsh plugin --profile web add link:$(pwd)
 dsh --profile web --dump-config   # 应显示 "# == dsh-ocgo-usage" 层
 ```
 
+> host 半的代码改动**必须重启 `dsh web`** 才会生效：Node 的 ESM 模块缓存不会因为 patch 层热重载而重新导入入口模块。
+
 ## 配置
 
-### 方式一：界面内 Set 面板（最简单）
+### 方式一：什么都不做（推荐）
 
-点击 chip 展开详情 → 左下角 `Set` → 输入 workspace id 与 cookie（已设置的值以 `••••` + 末尾 4 位显示，聚焦即可输入新值）→ 点击外部 / Esc / 保存按钮确认，立即生效。
+DSH 把 provider 的 API Key 存在凭据库里，也就是 `$DSH_HOME/.credentials.yaml` 的 `refs:` 段。插件每次刷新都通过 `ctx.credentials.resolve('OPENCODE_GO_API_KEY')` 读取它——这正是 `opencode-go` provider 自己用的那把 key。已经在 dsh 里配好 OpenCode Go 的用户**无需任何额外配置**。
 
-![Set editor](assets/set-cookie-wid.png)
+### 方式二：界面内 Set 面板
 
-### 方式二：环境变量（与 pi-ocgo-usage 同名）
+点击 chip 展开详情 → 左下角 `Set` → 输入 API Key → 点击外部 / Esc / 保存按钮确认，立即生效。面板会写入同一个凭据库（不是插件私有的配置文件），所以写入的 key 就是真正生效的那把，不存在被旧值遮蔽的问题。若该引用由只读来源（例如进程环境变量）提供，面板会明确报错而不是假装保存成功。
+
+### 方式三：环境变量或配置文件（凭据库的兜底）
 
 ```sh
-export OPENCODE_GO_COOKIE="auth=Fe26.2*...; oc_locale=en"
-export OPENCODE_GO_WORKSPACE_ID="wrk_01XXXXXXXXXXXXXXXXXXXXXXXX"
+export OPENCODE_GO_API_KEY="sk-..."
 ```
 
-### 方式三：配置文件
-
-写入 `$DSH_HOME/ocgo-usage.json`（默认 `~/.dsh/ocgo-usage.json`）：
+或写入 `$DSH_HOME/ocgo-usage.json`（默认 `~/.dsh/ocgo-usage.json`）：
 
 ```jsonc
 {
-  "cookie": "auth=Fe26.2*...; oc_locale=en",
-  "workspaceID": "wrk_01XXXXXXXXXXXXXXXXXXXXXXXX"
+  "apiKey": "sk-..."
 }
 ```
 
@@ -110,13 +114,13 @@ export OPENCODE_GO_WORKSPACE_ID="wrk_01XXXXXXXXXXXXXXXXXXXXXXXX"
 chmod 600 ~/.dsh/ocgo-usage.json
 ```
 
-优先级：环境变量 > 配置文件 > 内置默认。
+解析顺序：**凭据库（`ctx.credentials`）> 环境变量 > 配置文件**。凭据库优先，因为那是 DSH 存 provider key 的地方。
 
 ### 可选覆盖项
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `OPENCODE_GO_BASE_URL` | `https://opencode.ai` | API 基础地址 |
+| `OPENCODE_GO_BASE_URL` | `https://opencode.ai` | API 基础地址（配额路径固定为 `/zen/go/v1/usage`） |
 | `OPENCODE_GO_CACHE_TTL` | `300` | host 缓存秒数，范围 60–3600 |
 | `OPENCODE_GO_TIMEOUT_MS` | `10000` | HTTP 超时 |
 
@@ -125,10 +129,24 @@ chmod 600 ~/.dsh/ocgo-usage.json
 ```yaml
 - id: ocgo-usage
   config:
-    enabled: false    # 总开关，默认 true
+    enabled: false                        # 总开关，默认 true
+    apiKeyEnv: OPENCODE_GO_API_KEY        # 凭据引用的环境变量名，默认即此
 ```
 
-> **Cookie 过期：** `auth` cookie 签发后有效期 1 年。过期（或被吊销）后页面 302 跳转到登录页，chip 显示 `<err:http302>` 而非过期数字。重新登录 opencode.ai 后，通过 Set 面板更新 cookie 即可。
+> **API Key 无效或过期：** chip 显示 `<err:apikey>`（HTTP 401/403）。重新签发 key 后，通过 Set 面板更新，或在 `$DSH_HOME/.credentials.yaml` 中更新 `OPENCODE_GO_API_KEY`。
+
+### 错误码
+
+| `<err:...>` | 含义 |
+|---|---|
+| `noconfig` | 三处都没找到可用 key |
+| `apikey` | HTTP 401/403，key 无效或已被吊销 |
+| `httpNNN` | 其它 HTTP 失败 |
+| `timeout` | 请求超时 |
+| `parse` | 响应不是合法 JSON |
+| `empty` | HTTP 200 但没有任何可识别窗口 |
+| `fetch` | 网络层失败 |
+| `disabled` | 插件被 `enabled: false` 关闭 |
 
 ## 使用
 
@@ -136,22 +154,28 @@ chmod 600 ~/.dsh/ocgo-usage.json
 
 ![Usage detail](assets/usage-detail.png)
 
+Set 面板（单一 API Key 字段；已配置时输入框以提示文案表示，而不是回显任何字符）：
+
+![Set editor](assets/set-cookie-wid.png)
+
 ### chip 不显示
 
 可见性只认 `opencode-go` 和 `opencode-go/<子路由>` 这两种 provider id。形如 `opencode-go-live-completions` 的连字符路由名会被当成别的 provider 静默忽略；chip 不渲染，控制台也没有任何提示。把 profile 的 `cordis.patch.yml` 里该路由 id 改成 `opencode-go/live-completions` 这种带斜杠的写法即可。
 
+另外，**尚未提交过模型选择的新会话**里 `modelSelection` 投影还是空的，此时 chip 会隐藏——发出第一条消息（或在模型选择器里选定模型）后即出现。
+
 ## 工作原理
 
-- **Host 半**（`src/index.ts`、`src/service.ts`、`src/api.ts`、`src/routes.ts`）—— 携带 cookie 抓取 `GET /workspace/<wrk>/go`，解析 SSR 渲染的 `data-slot="usage-item"` 块为每个窗口的 `{percent, resetInSec, status}`，缓存结果，通过同源 JSON 端点 `/api/ocgo-usage`（+ `/api/ocgo-usage/refresh`、`/api/ocgo-usage/config`）提供数据。
+- **Host 半**（`src/index.ts`、`src/service.ts`、`src/api.ts`、`src/routes.ts`、`src/credentials.ts`）—— 每次刷新先通过凭据库（`ctx.credentials`）解析 `OPENCODE_GO_API_KEY`，回退到环境变量与 `$DSH_HOME/ocgo-usage.json`；然后 `GET https://opencode.ai/zen/go/v1/usage`（`Authorization: Bearer <key>`），把返回的 `usage.{rolling,weekly,monthly}.{status,percent,resetsAt}` 归一化为三个窗口（`resetInSec` 由 `resetsAt` 换算），缓存结果，通过同源 JSON 端点 `/api/ocgo-usage`（+ `/api/ocgo-usage/refresh`、`/api/ocgo-usage/config`）提供数据。
 - **浏览器半**（`src/client/`）—— 向 `conversation.input.right` slot（输入框工具行，模型选择器旁）注册 chip，每 10s 轮询 host 端点，按严重级别着色渲染三个窗口；可见性来自会话 `modelSelection` 投影里的实时 provider。
 
-浏览器永远看不到 cookie；抓取与解析全部在 host 侧完成。
+浏览器永远看不到 API Key；抓取与解析全部在 host 侧完成。
 
 ## 安全
 
-- `auth` cookie 是**完整的 OpenCode 用户会话**。任何人拿到它都能访问你账户内的所有 workspace、订阅与账单信息。
-- 插件**绝不**记录 cookie、不把它放进错误信息、不发送给浏览器。
-- 配置编辑器只把新值写入 `$DSH_HOME/ocgo-usage.json`（chmod 600），浏览器始终只看到 `••••` + 末尾 4 位的掩码视图。
+- 只需要一把 OpenCode Go **API Key**——它是作用域受限的接口凭据，**不是**浏览器会话 cookie（旧版本需要的那个 cookie 能访问你账户内的全部 workspace、订阅与账单，已经不使用了）。
+- 插件**绝不**记录 key、不把它放进错误信息、不发送给浏览器。
+- 配置编辑器只把新值写入 DSH 凭据库；浏览器始终只看到"已配置/未配置"与末 4 位掩码，永远拿不到完整值。
 
 ## 开发
 
@@ -170,7 +194,18 @@ MIT —— 见 [LICENSE](./LICENSE)。
 
 ## Changelog
 
-### v2.0.0 - 中英双语支持
+### v0.2.0 - 只用 API Key
+
+**🎉 重大更新：不再需要 cookie 和 workspace id。**
+
+- **🔑 官方配额接口** —— 改为 `GET https://opencode.ai/zen/go/v1/usage`，用 `Authorization: Bearer <OPENCODE_GO_API_KEY>` 认证，也就是 `opencode-go` provider 自己那把 key
+- **🗑️ 移除会话 cookie 与 workspace id** —— `OPENCODE_GO_COOKIE`、`OPENCODE_GO_WORKSPACE_ID` 与 `$DSH_HOME/ocgo-usage.json` 里的 `cookie` / `workspaceID` 字段全部废弃；SSR HTML 抓取与解析整条链路删除
+- **🔐 密钥走 DSH 凭据库** —— 通过 `ctx.credentials` 解析 `OPENCODE_GO_API_KEY`，与模型 provider 共用同一个存储，轮换 key 无需重启
+- **✏️ Set 面板改为单一 API Key 字段** —— 写入的是凭据库（真正生效的那个存储），而不是插件私有配置文件；若引用由只读来源提供则明确报错
+- **🌏 与界面语言无关** —— 接口返回 JSON，不再需要中英文标签解析，中英文界面结果天然一致（v2.0.0 引入的标签本地化解析随之删除）
+- **🧪 测试重写** —— 覆盖 JSON 解析、`resetsAt` 换算、错误码映射、凭据解析顺序与只读遮蔽保护（62 个用例）
+
+### v2.0.0 - 中英双语支持（历史）
 
 **🎉 重大更新：现在支持中文界面了！**
 

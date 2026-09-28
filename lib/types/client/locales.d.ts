@@ -8,7 +8,9 @@ export declare const NS = "ocgo";
 export declare const zh: {
     readonly 'ocgo.unavailable': "用量不可用";
     readonly 'ocgo.error': "查询失败：{code}";
-    readonly 'ocgo.noconfig': "未配置：请设置 OPENCODE_GO_COOKIE 与 OPENCODE_GO_WORKSPACE_ID（或 $DSH_HOME/ocgo-usage.json）";
+    readonly 'ocgo.noconfig': "未配置：请设置 OPENCODE_GO_API_KEY（环境变量、$DSH_HOME/.credentials.yaml 或 $DSH_HOME/ocgo-usage.json）";
+    readonly 'ocgo.apikey': "API Key 无效或已过期";
+    readonly 'ocgo.empty': "返回中没有可用用量数据";
     readonly 'ocgo.refresh': "刷新";
     readonly 'ocgo.fetchedAt': "upd {time}";
     readonly 'ocgo.rolling': "5h 滚动";
@@ -21,15 +23,17 @@ export declare const zh: {
     readonly 'ocgo.sep': "·";
     readonly 'ocgo.set': "设置";
     readonly 'ocgo.save': "保存";
-    readonly 'ocgo.workspaceID': "workspace id";
-    readonly 'ocgo.cookie': "cookie";
+    readonly 'ocgo.apiKeyLabel': "OpenCode Go API Key";
+    readonly 'ocgo.configured': "已配置 — 输入新 Key 可替换";
     readonly 'ocgo.setHint': "点击外部或按 Esc 保存";
 };
 /** English copy. */
 export declare const en: {
     readonly 'ocgo.unavailable': "usage unavailable";
     readonly 'ocgo.error': "Query failed: {code}";
-    readonly 'ocgo.noconfig': "Not configured: set OPENCODE_GO_COOKIE and OPENCODE_GO_WORKSPACE_ID (or $DSH_HOME/ocgo-usage.json)";
+    readonly 'ocgo.noconfig': "Not configured: set OPENCODE_GO_API_KEY (env, $DSH_HOME/.credentials.yaml, or $DSH_HOME/ocgo-usage.json)";
+    readonly 'ocgo.apikey': "API key invalid or expired";
+    readonly 'ocgo.empty': "Response carried no usable usage data";
     readonly 'ocgo.refresh': "Refresh";
     readonly 'ocgo.fetchedAt': "upd {time}";
     readonly 'ocgo.rolling': "5h Rolling";
@@ -42,8 +46,8 @@ export declare const en: {
     readonly 'ocgo.sep': "·";
     readonly 'ocgo.set': "Set";
     readonly 'ocgo.save': "Save";
-    readonly 'ocgo.workspaceID': "workspace id";
-    readonly 'ocgo.cookie': "cookie";
+    readonly 'ocgo.apiKeyLabel': "OpenCode Go API Key";
+    readonly 'ocgo.configured': "configured — type a new key to replace";
     readonly 'ocgo.setHint': "click outside or press Esc to save";
 };
 /** Key type of the dictionary (for the LocaleNamespaceMap merge). */

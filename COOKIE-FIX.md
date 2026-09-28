@@ -1,50 +1,45 @@
-# Cookie 解析修复记录（COOKIE-FIX）
+# Cookie 解析修复记录（历史存档）
 
-> 分支：`fix/cookie-parse`（rebase 到最新 `origin/main` = `721dfeb`）
-> 日期：2026-08-19（首次），2026-08-19（rebase + 调整）
-> 性质：**只修 cookie 解析错误**；不新增本地化，但兼容已合入的中文解析
+> **⚠️ 已废弃 —— 仅供考古。**
+> 自 **v0.2.0** 起，本插件改用 OpenCode 官方配额接口
+> `GET https://opencode.ai/zen/go/v1/usage`（`Authorization: Bearer <OPENCODE_GO_API_KEY>`），
+> 浏览器会话 cookie、workspace id、SSR 页面抓取与解析整条链路都已删除。
+> 下面记录的那个 bug 及修复**在今天的代码里已经不存在**（连 `normalizeCookie` 函数本身都没有了）。
+> 保留这份文档只是为了不让这段排查过程随 git 历史一起消失。
 
-## 背景与决策（更新）
-
-- 原项目（v587d，Shawn 维护）已通过 **PR #2**（`waknow/fix/zh-locale-parsing`）合并了**中文页面解析**（`滚动/每周/每月` 标签、`重置于` 短语），且另有 PR #3/#4 的 README 改动。最新 main = `721dfeb`。
-- 本分支 `fix/cookie-parse` 已 **rebase 到最新 main**，在其之上再叠一个 cookie 解析修复。
-- **只修 `normalizeCookie` 的解析错误**，不引入额外功能。解析层维持原项目（含其中文解析）。
-
-## Bug 描述（根因）
+## 当年修的是什么
 
 原 `normalizeCookie`（`src/config.ts`）用 `/^auth=/` 判断整个字符串是否以 `auth=` 开头：
 
-- 若以 `auth=` 开头 → 正常透传。
+- 以 `auth=` 开头 → 正常透传。
 - 否则 → **把第一个分号段当成 auth 值**，拼成 `auth=<第一段>; ...`。
 
-真实浏览器拷出的 cookie 通常带 locale 且 locale 可能排在前：
+真实浏览器拷出的 cookie 通常带 locale，且 locale 可能排在前：
 
 ```
 oc_locale=zh; desktop_promo_dismissed=1; auth=Fe26.2*...
 ```
 
-它**不以 `auth=` 开头** → 原代码把 `oc_locale=zh` 当 auth → 写入 `auth=oc_locale=zh; oc_locale=en` → opencode.ai 拒绝 → 触发登录页重定向 → 插件报 `http302`（"页面解析空"）。
+它不以 `auth=` 开头 → 原代码把 `oc_locale=zh` 当成了 auth → 写入
+`auth=oc_locale=zh; oc_locale=en` → opencode.ai 拒绝 → 跳登录页 → 插件报
+`<err:http302>`（"页面解析空"）。
 
-> 这个 bug 与原项目是否含中文解析**无关**：任何"auth 不在第一段"的 cookie 都会写坏（纯英文 cookie、带 `desktop_promo_dismissed` 等无关段的 cookie 同样触发）。PR #2 只修了解析层，**从未修过写入层的这个 bug**。
+这个 bug 与解析层是否支持中文**无关**：任何"auth 不在第一段"的 cookie 都会被写坏。
 
-## 修复内容
+## 当年的修复
 
-`src/config.ts` → `normalizeCookie` 重写为**顺序无关 + 拒绝假值 + 保留用户 locale**：
+`normalizeCookie` 重写为**顺序无关 + 拒绝假值 + 保留用户 locale**：
 
-1. **顺序无关**：在整串中查找 `auth=` 段（不再假设它在第一个）；找不到时，若存在"裸 opaque token"（无 `=` 且长度 ≥ 8），自动补 `auth=`。
-2. **拒绝假 cookie**：两者都没有 → 返回 `undefined`，调用方（`writeConfigFile`）拒绝写入，**绝不**拼出 `auth=oc_locale=zh`。
-3. **保留用户 locale**：提取粘贴 cookie 里的 `oc_locale` 并原样保留（`zh` 保持 `zh`），缺省或非法（非 2-3 字母）时回退 `en`。
-   - 设计说明：既然解析层已支持中文页，保留 `oc_locale=zh` 可让 zh 用户继续看中文页（而非被强制英文）。若想强制英文页，可把这里改成固定 `en`。
-4. 分隔符 `;` 与 `,` 都支持（浏览器 Cookie 头 / Set-Cookie 风格）；丢弃无关 UI 段（`desktop_promo_dismissed` 等）。
+1. **顺序无关**：在整串中查找 `auth=` 段，而不是假设它在第一段。
+2. **拒绝假 cookie**：既没有 `auth=` 也没有裸 opaque token 时返回 `undefined`，调用方拒绝写入，绝不拼出 `auth=oc_locale=zh`。
+3. **保留用户 locale**：提取 `oc_locale` 原样保留，缺省或非法时回退 `en`。
+4. 分隔符 `;` 与 `,` 都支持；丢弃无关 UI 段（`desktop_promo_dismissed` 等）。
 
-## 验证
+## 为什么这段历史仍然值得记一笔
 
-- `pnpm test`：44/44 通过（含新增回归用例：locale 在前的真实 cookie 不被污染、纯 locale 拒绝写入、逗号分隔、引号值、locale 保留/回退）。
-- `pnpm typecheck` 通过。
-- 真实验证（独立脚本，同 URL+同 cookie）：`oc_locale=zh` cookie → opencode 返回中文页（`滚动用量`…），解析器可读；写坏修复后不再 302。
+它解释了本仓库为什么在很长一段时间里把 cookie 当作唯一数据来源，以及丑事是怎么暴露的：
+**cookie 是会过期的完整用户会话**，签发一年后（或被吊销）就静默失效，插件只能显示一个
+`<err:http302>`，用户除了重新登录并手工粘贴新 cookie 之外无计可施。
 
-## 后续同步指引
-
-- 分支 `fix/cookie-parse` 即本修复的载体，后续改动直接在此分支上做，或从此分支 cherry-pick / rebase 到目标。
-- 已放弃的历史分支（`rebase-work` / `feat/cookie-robustness` / `pr-zh` / `pr2`）已删除；仅存的 `main` 与 `fix/cookie-parse`。
-- dsh 安装目录同步：`repo-tmp/lib` → `~/.dsh/profiles/web/node_modules/dsh-ocgo-usage/lib`（构建后覆盖）。
+v0.2.0 的 API Key 方案正是对这个结构性问题的回答：改用作用域受限、与模型 provider
+共用同一份凭据的 API Key，不再需要从浏览器里搬运任何会话材料。

@@ -3,9 +3,9 @@
  * composer tool row (`conversation.input.right`) next to the model selector.
  * The chip polls the host `/api/ocgo-usage` endpoint for the three usage
  * windows (rolling 5h / weekly / monthly);
- * clicking reveals per-window reset countdowns, a Set editor (masked
- * workspace/cookie) and a manual refresh. In the error state, clicking the
- * chip opens the Set editor directly so a stale credential can be replaced in
+ * clicking reveals per-window reset countdowns, a Set editor (masked API key)
+ * and a manual refresh. In the error state, clicking the
+ * chip opens the Set editor directly so a stale key can be replaced in
  * place.
  * @module dsh-ocgo-usage/client/OcgoDockEntry
  */

@@ -1,14 +1,28 @@
 /**
- * HTTP fetch + response adapters for dsh-ocgo-usage
+ * OpenCode Go quota API client for dsh-ocgo-usage.
  *
- * Cookie path (current): GET /workspace/<wrk>/go HTML SSR scrape.
- * The opencode.ai dashboard renders usage values inline in
- * `data-slot="usage-item"` blocks; this is the only cookie-authenticated
- * way to read usage today. (The proposed official API from
- * anomalyco/opencode#16513 is not merged yet; when it ships, an apikey
- * path can be added behind the same `NormalizedUsage` shape.)
+ * The official quota endpoint is
+ * `GET <baseUrl>/zen/go/v1/usage`, authenticated with the regular OpenCode Go
+ * API key (`Authorization: Bearer <key>`) — the same key the `opencode-go`
+ * model provider uses. No workspace id and no web-session cookie are involved,
+ * so there is no SSR scraping and no locale-specific label parsing: the
+ * response is JSON and identical for every UI language.
  *
- * Adapted from pi-ocgo-usage/src/api.ts.
+ * The response shape is:
+ *
+ * ```json
+ * {
+ *   "usage": {
+ *     "rolling": { "status": "ok", "percent": 4, "resetsAt": "2026-09-28T20:28:02.440Z" },
+ *     "weekly":  { "status": "ok", "percent": 3, "resetsAt": "2026-10-05T00:00:00.000Z" },
+ *     "monthly": { "status": "ok", "percent": 1, "resetsAt": "2026-10-21T07:41:16.000Z" }
+ *   }
+ * }
+ * ```
+ *
+ * Unknown fields are tolerated (the API may grow), but a body without any
+ * recognizable window is rejected loudly so a silently-broken monitor never
+ * masquerades as a healthy one.
  * @module dsh-ocgo-usage/api
  */
 import type { NormalizedUsage, OcgoConfig } from './types.ts';
@@ -18,33 +32,31 @@ export declare class UsageError extends Error {
     readonly name = "UsageError";
     constructor(message: string, code: string);
 }
-/** Fetch usage through the cookie path. Throws UsageError on any failure. */
-export declare function fetchViaCookie(cfg: OcgoConfig): Promise<Omit<NormalizedUsage, 'updatedAt'>>;
+/** Recognized quota window keys, in display order. */
+export declare const WINDOW_KEYS: readonly ["rolling", "weekly", "monthly"];
 /**
- * Parse the opencode console SSR HTML page and extract the three usage
- * windows. Reset times are emitted as English phrases inside
- * `data-slot="reset-time"` (e.g. "Resets in 2 hours 29 minutes"). We parse
- * them into a coarse `resetInSec` estimate; precise second-level resets are
- * not needed for display.
+ * Fetch usage through the API-key path. Throws UsageError on any failure.
+ * @param cfg - resolved config carrying the API key, base URL and timeout.
+ * @param now - epoch ms used to derive each window's reset countdown.
  */
-export declare function fromSSRHTML(html: string): Omit<NormalizedUsage, 'updatedAt'>;
+export declare function fetchViaApiKey(cfg: OcgoConfig, now?: number): Promise<Omit<NormalizedUsage, 'updatedAt'>>;
 /**
- * Parse a human duration phrase into seconds. Examples (English plus the
- * Chinese renderings used by the zh locale):
- *   "2 hours 29 minutes" → 8940      "2 小时 29 分钟" → 8940
- *   "45 minutes"          → 2700     "45 分钟"         → 2700
- *   "5 days"              → 432000   "5 天"            → 432000
- *   "30 seconds"          → 30       "30 秒"           → 30
- *   "1 week"              → 604800   "1 周"            → 604800
- *   "1 month"             → 2592000  "1 个月"          → 2592000
- *   "1 year"              → 31536000 "1 年"            → 31536000
- *
- * Returns 0 on unrecognized input.
+ * Normalize a `/zen/go/v1/usage` response body into window records.
+ * @param body - parsed JSON payload.
+ * @param now - epoch ms used to derive each window's reset countdown.
+ * @returns the recognized windows, or `undefined` when none are usable.
  */
-export declare function parseDurationToSec(phrase: string): number;
+export declare function parseUsageBody(body: unknown, now?: number): Omit<NormalizedUsage, 'updatedAt'> | undefined;
 /**
- * Fetch usage with the current config (cookie path only today) and stamp
- * the fetch timestamp so the UI can show data freshness.
+ * Convert an ISO-8601 `resetsAt` stamp into seconds from `now`.
+ * Returns 0 when the stamp is absent, unparseable, or already in the past —
+ * the UI renders that as "resets now" rather than a negative countdown.
+ */
+export declare function parseResetInSec(resetsAt: unknown, now?: number): number;
+/**
+ * Fetch usage with the current config and stamp the fetch timestamp so the UI
+ * can show data freshness.
+ * @param cfg - resolved config (must carry the API key).
  */
 export declare function fetchUsage(cfg: OcgoConfig): Promise<NormalizedUsage>;
 //# sourceMappingURL=api.d.ts.map

@@ -2,7 +2,9 @@
  * dsh-ocgo-usage host half — mounts the usage service and its HTTP routes.
  * The browser half (the `./client` entry) reads the three OpenCode Go usage
  * windows (rolling 5h / weekly / monthly) through the same-origin
- * `/api/ocgo-usage` JSON endpoints. Install via
+ * `/api/ocgo-usage` JSON endpoints. The host queries the official quota API
+ * (`GET /zen/go/v1/usage`) with the `OPENCODE_GO_API_KEY` credential, so no
+ * workspace id and no web-session cookie are needed. Install via
  * `dsh plugin --profile web add <path-or-git-url>`; the cordis.patch.yml
  * inserts this plugin row.
  * @module dsh-ocgo-usage
@@ -16,9 +18,27 @@ import { OcgoUsageService, type OcgoUsageConfig } from './service.ts'
 export { OcgoUsageService } from './service.ts'
 export type { OcgoUsageConfig, OcgoUsageView } from './service.ts'
 export { OCGO_API_PREFIX, makeOcgoRoutes } from './routes.ts'
-export { loadConfig, normalizeCookie, configFilePath } from './config.ts'
-export type { NormalizedUsage, OcgoConfig, UsageWindow, UsageWindowKind, UsageStatus } from './types.ts'
-export { fetchUsage, fromSSRHTML, parseDurationToSec, UsageError } from './api.ts'
+export {
+  CREDENTIAL_REF,
+  ENV_API_KEY,
+  USAGE_PATH,
+  configFilePath,
+  loadConfig,
+  maskSecret,
+  normalizeApiKey,
+  usageEndpoint,
+} from './config.ts'
+export { credentialRef, describeCredential, resolveCredential } from './credentials.ts'
+export type { CredentialInfo, CredentialProviderFace, CredentialRef, ResolvedCredential } from './credentials.ts'
+export type { MaskedConfigView, NormalizedUsage, OcgoConfig, UsageWindow, UsageWindowKind, UsageStatus } from './types.ts'
+export {
+  WINDOW_KEYS,
+  fetchUsage,
+  fetchViaApiKey,
+  parseResetInSec,
+  parseUsageBody,
+  UsageError,
+} from './api.ts'
 
 /** Stable cordis plugin name (matches cordis.patch.yml insert id). */
 export const name = 'ocgo-usage'

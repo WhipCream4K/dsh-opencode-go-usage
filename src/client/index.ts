@@ -5,7 +5,7 @@
  * poll the host snapshot (every 10 s),
  * refresh on demand. The chip shows the three usage windows (rolling 5h /
  * weekly / monthly) in a compact form; while the host reports no usable data
- * (missing config, cookie error, or provider failure) it renders a compact
+ * (missing config, key error, or provider failure) it renders a compact
  * `<err:code>` state with a manual refresh action.
  *
  * Provider visibility is decided CLIENT-side from the live model selection:

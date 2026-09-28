@@ -11,19 +11,23 @@ import {
   DEFAULT_BASE_URL,
   DEFAULT_CACHE_TTL,
   DEFAULT_TIMEOUT_MS,
+  ENV_API_KEY,
   ENV_BASE_URL,
   ENV_CACHE_TTL,
-  ENV_COOKIE,
   ENV_TIMEOUT_MS,
-  ENV_WORKSPACE_ID,
+  MAX_CACHE_TTL,
+  MIN_CACHE_TTL,
+  USAGE_PATH,
+  configFilePath,
   loadConfig,
   maskSecret,
   maskedConfigView,
-  normalizeCookie,
+  normalizeApiKey,
+  usageEndpoint,
   writeConfigFile,
 } from './config.ts'
 
-const ENV_KEYS = [ENV_COOKIE, ENV_WORKSPACE_ID, ENV_BASE_URL, ENV_CACHE_TTL, ENV_TIMEOUT_MS, 'DSH_HOME']
+const ENV_KEYS = [ENV_API_KEY, ENV_BASE_URL, ENV_CACHE_TTL, ENV_TIMEOUT_MS, 'DSH_HOME']
 
 /** Clear every env var the config reads, remembering the previous values. */
 function clearEnv(): Record<string, string | undefined> {
@@ -42,209 +46,159 @@ function restoreEnv(saved: Record<string, string | undefined>): void {
   }
 }
 
-describe('normalizeCookie', () => {
-  it('passes through a full header and preserves its locale', () => {
-    expect(normalizeCookie('auth=Fe26.2*abc; oc_locale=zh')).toBe('auth=Fe26.2*abc; oc_locale=zh')
-    expect(normalizeCookie('auth=Fe26.2*abc')).toBe('auth=Fe26.2*abc; oc_locale=en')
+describe('normalizeApiKey', () => {
+  it('passes a bare key through unchanged', () => {
+    expect(normalizeApiKey('sk-abc123')).toBe('sk-abc123')
   })
 
-  it('prefixes auth= onto a bare auth value', () => {
-    expect(normalizeCookie('Fe26.2*abc')).toBe('auth=Fe26.2*abc; oc_locale=en')
+  it('strips surrounding whitespace and newlines', () => {
+    expect(normalizeApiKey('  sk-abc123 \n')).toBe('sk-abc123')
   })
 
-  it('preserves a pasted locale (zh stays zh, ja stays ja)', () => {
-    expect(normalizeCookie('Fe26.2*abc; oc_locale=zh')).toBe('auth=Fe26.2*abc; oc_locale=zh')
-    expect(normalizeCookie('Fe26.2*abc; oc_locale=ja')).toBe('auth=Fe26.2*abc; oc_locale=ja')
+  it('strips a pasted Authorization header value', () => {
+    expect(normalizeApiKey('Bearer sk-abc123')).toBe('sk-abc123')
+    expect(normalizeApiKey('bearer   sk-abc123')).toBe('sk-abc123')
   })
 
-  it('falls back to en when the locale is absent or malformed', () => {
-    expect(normalizeCookie('auth=Fe26.2*abc')).toBe('auth=Fe26.2*abc; oc_locale=en')
-    expect(normalizeCookie('auth=Fe26.2*abc; oc_locale=')).toBe('auth=Fe26.2*abc; oc_locale=en')
-    expect(normalizeCookie('auth=Fe26.2*abc; oc_locale=verylonglocale')).toBe(
-      'auth=Fe26.2*abc; oc_locale=en',
-    )
+  it('strips surrounding quotes', () => {
+    expect(normalizeApiKey('"sk-abc123"')).toBe('sk-abc123')
+    expect(normalizeApiKey("'sk-abc123'")).toBe('sk-abc123')
   })
 
-  it('is order-independent and never corrupts locale-first cookies (regression)', () => {
-    // The old code turned "oc_locale=zh; ...; auth=..." into
-    // "auth=oc_locale=zh; ...". This must never happen.
-    expect(normalizeCookie('oc_locale=zh; auth=Fe26.2*abc')).toBe('auth=Fe26.2*abc; oc_locale=zh')
-    expect(normalizeCookie('oc_locale=en; desktop_promo_dismissed=1; auth=Fe26.2*abc')).toBe(
-      'auth=Fe26.2*abc; oc_locale=en',
-    )
-  })
-
-  it('accepts comma-separated cookies (Set-Cookie style)', () => {
-    expect(normalizeCookie('oc_locale=zh, desktop_promo_dismissed=1, auth=Fe26.2*abc')).toBe(
-      'auth=Fe26.2*abc; oc_locale=zh',
-    )
-  })
-
-  it('accepts a quoted auth value', () => {
-    expect(normalizeCookie('auth="Fe26.2*quoted"; oc_locale=en')).toBe(
-      'auth=Fe26.2*quoted; oc_locale=en',
-    )
-  })
-
-  it('rejects input with no real auth token (no fake auth=)', () => {
-    // Regression: the old code fabricated "auth=oc_locale=zh; ..." from a
-    // locale-only paste. Now it refuses instead.
-    expect(normalizeCookie('oc_locale=zh')).toBeUndefined()
-    expect(normalizeCookie('zh')).toBeUndefined()
-    expect(normalizeCookie('desktop_promo_dismissed=1; auth=')).toBeUndefined()
-  })
-
-  it('normalizes whitespace and rejects empty input', () => {
-    expect(normalizeCookie('  auth=Fe26.2*abc ;  oc_locale=zh  ')).toBe('auth=Fe26.2*abc; oc_locale=zh')
-    expect(normalizeCookie('   ')).toBeUndefined()
-    expect(normalizeCookie(undefined)).toBeUndefined()
+  it('returns undefined for empty input', () => {
+    expect(normalizeApiKey(undefined)).toBeUndefined()
+    expect(normalizeApiKey('')).toBeUndefined()
+    expect(normalizeApiKey('   ')).toBeUndefined()
+    expect(normalizeApiKey('Bearer ')).toBeUndefined()
   })
 })
 
 describe('loadConfig', () => {
-  let savedEnv: Record<string, string | undefined>
   let tmp: string
+  let saved: Record<string, string | undefined>
 
   beforeEach(() => {
-    savedEnv = clearEnv()
-    tmp = mkdtempSync(join(tmpdir(), 'dsh-ocgo-usage-test-'))
+    saved = clearEnv()
+    tmp = mkdtempSync(join(tmpdir(), 'dsh-ocgo-usage-cfg-'))
     process.env.DSH_HOME = tmp
   })
 
   afterEach(() => {
-    restoreEnv(savedEnv)
+    restoreEnv(saved)
     rmSync(tmp, { recursive: true, force: true })
   })
 
-  it('returns defaults when nothing is configured', () => {
+  it('falls back to the defaults when nothing is configured', () => {
     const cfg = loadConfig()
-    expect(cfg.cookie).toBeUndefined()
-    expect(cfg.workspaceID).toBeUndefined()
+    expect(cfg.apiKey).toBeUndefined()
     expect(cfg.baseUrl).toBe(DEFAULT_BASE_URL)
     expect(cfg.cacheTTL).toBe(DEFAULT_CACHE_TTL)
     expect(cfg.timeoutMs).toBe(DEFAULT_TIMEOUT_MS)
   })
 
-  it('reads env vars and normalizes the cookie', () => {
-    process.env[ENV_COOKIE] = 'Fe26.2*env'
-    process.env[ENV_WORKSPACE_ID] = 'wrk_env'
-    process.env[ENV_BASE_URL] = 'https://example.com'
+  it('reads the API key from the environment', () => {
+    process.env[ENV_API_KEY] = '  sk-from-env  '
+    expect(loadConfig().apiKey).toBe('sk-from-env')
+  })
+
+  it('reads the API key from the config file', () => {
+    writeFileSync(configFilePath(), JSON.stringify({ apiKey: 'sk-from-file' }))
+    expect(loadConfig().apiKey).toBe('sk-from-file')
+  })
+
+  it('lets the environment win over the config file', () => {
+    writeFileSync(
+      configFilePath(),
+      JSON.stringify({ apiKey: 'sk-from-file', baseUrl: 'https://file.test' }),
+    )
+    process.env[ENV_API_KEY] = 'sk-from-env'
+    const cfg = loadConfig()
+    expect(cfg.apiKey).toBe('sk-from-env')
+    // baseUrl has no env override here, so the file still applies.
+    expect(cfg.baseUrl).toBe('https://file.test')
+  })
+
+  it('clamps the cache TTL into [MIN, MAX]', () => {
+    process.env[ENV_CACHE_TTL] = '5'
+    expect(loadConfig().cacheTTL).toBe(MIN_CACHE_TTL)
+    process.env[ENV_CACHE_TTL] = '999999'
+    expect(loadConfig().cacheTTL).toBe(MAX_CACHE_TTL)
     process.env[ENV_CACHE_TTL] = '120'
-    process.env[ENV_TIMEOUT_MS] = '5000'
-    const cfg = loadConfig()
-    expect(cfg.cookie).toBe('auth=Fe26.2*env; oc_locale=en')
-    expect(cfg.workspaceID).toBe('wrk_env')
-    expect(cfg.baseUrl).toBe('https://example.com')
-    expect(cfg.cacheTTL).toBe(120)
-    expect(cfg.timeoutMs).toBe(5000)
+    expect(loadConfig().cacheTTL).toBe(120)
   })
 
-  it('env wins over the config file', () => {
-    writeFileSync(join(tmp, 'ocgo-usage.json'), JSON.stringify({
-      cookie: 'auth=Fe26.2*file; oc_locale=zh',
-      workspaceID: 'wrk_file',
-      cacheTTL: 9999,
-    }))
-    process.env[ENV_COOKIE] = 'auth=Fe26.2*env; oc_locale=zh'
-    const cfg = loadConfig()
-    expect(cfg.cookie).toBe('auth=Fe26.2*env; oc_locale=zh')
-    expect(cfg.workspaceID).toBe('wrk_file')
+  it('ignores a corrupt config file instead of throwing', () => {
+    writeFileSync(configFilePath(), '{ not json')
+    expect(() => loadConfig()).not.toThrow()
+    expect(loadConfig().apiKey).toBeUndefined()
   })
 
-  it('falls back to the config file and clamps cacheTTL', () => {
-    writeFileSync(join(tmp, 'ocgo-usage.json'), JSON.stringify({
-      cookie: 'Fe26.2*file',
-      workspaceID: 'wrk_file',
-      cacheTTL: 9999,
-    }))
-    const cfg = loadConfig()
-    expect(cfg.cookie).toBe('auth=Fe26.2*file; oc_locale=en')
-    expect(cfg.workspaceID).toBe('wrk_file')
-    expect(cfg.cacheTTL).toBe(3600)
-    expect(cfg.timeoutMs).toBe(DEFAULT_TIMEOUT_MS)
-  })
-
-  it('tolerates a broken config file', () => {
-    writeFileSync(join(tmp, 'ocgo-usage.json'), '{not json')
-    const cfg = loadConfig()
-    expect(cfg.cookie).toBeUndefined()
-    expect(cfg.baseUrl).toBe(DEFAULT_BASE_URL)
+  it('builds the official quota endpoint from the base URL', () => {
+    expect(usageEndpoint(loadConfig())).toBe(`${DEFAULT_BASE_URL}${USAGE_PATH}`)
+    expect(usageEndpoint({ ...loadConfig(), baseUrl: 'https://x.test/' })).toBe(
+      `https://x.test${USAGE_PATH}`,
+    )
   })
 })
 
-describe('masked config view + write', () => {
-  let savedEnv: Record<string, string | undefined>
+describe('maskSecret', () => {
+  it('keeps only the last 4 characters', () => {
+    expect(maskSecret('sk-abcdefgh')).toEqual({ set: true, tail: 'efgh' })
+  })
+
+  it('reports unset for undefined or empty values', () => {
+    expect(maskSecret(undefined)).toEqual({ set: false, tail: '' })
+    expect(maskSecret('')).toEqual({ set: false, tail: '' })
+  })
+})
+
+describe('maskedConfigView / writeConfigFile', () => {
   let tmp: string
+  let saved: Record<string, string | undefined>
 
   beforeEach(() => {
-    savedEnv = clearEnv()
-    tmp = mkdtempSync(join(tmpdir(), 'dsh-ocgo-usage-mask-'))
+    saved = clearEnv()
+    tmp = mkdtempSync(join(tmpdir(), 'dsh-ocgo-usage-cfg-'))
     process.env.DSH_HOME = tmp
   })
 
   afterEach(() => {
-    restoreEnv(savedEnv)
+    restoreEnv(saved)
     rmSync(tmp, { recursive: true, force: true })
   })
 
-  it('masks the tail of a secret', () => {
-    expect(maskSecret(undefined)).toEqual({ set: false, tail: '' })
-    expect(maskSecret('abcd')).toEqual({ set: true, tail: 'abcd' })
-    expect(maskSecret('Fe26.2*long-value-xyz1')).toEqual({ set: true, tail: 'xyz1' })
-  })
-
-  it('exposes only masked values in the view', () => {
-    const cookie = 'auth=Fe26.2*secret-cookie-9abc; oc_locale=zh'
-    const ws = 'wrk_01XXXXXXXXXXXXXXXXXXXX8q2w'
-    process.env[ENV_COOKIE] = cookie
-    process.env[ENV_WORKSPACE_ID] = ws
+  it('never exposes the full API key to the browser view', () => {
+    // Deliberately synthetic. Never paste a real key into a fixture: this file
+    // is published, and a live credential in a test is a permanent leak.
+    const key = 'sk-TESTONLY-000000000000000000000000000000000000000000000000000000000'
+    process.env[ENV_API_KEY] = key
     const view = maskedConfigView()
-    // The env cookie is normalized on load: locale is preserved as zh.
-    const normalized = 'auth=Fe26.2*secret-cookie-9abc; oc_locale=zh'
-    expect(view.cookie).toEqual({ set: true, tail: normalized.slice(-4) })
-    expect(view.workspaceID).toEqual({ set: true, tail: ws.slice(-4) })
-    expect(JSON.stringify(view)).not.toContain('secret-cookie')
+    expect(view.apiKey).toEqual({ set: true, tail: key.slice(-4) })
+    expect(JSON.stringify(view)).not.toContain('TESTONLY')
   })
 
-  it('writes new values to the config file and normalizes the cookie', () => {
-    const view = writeConfigFile({ cookie: 'Fe26.2*new', workspaceID: 'wrk_new' })
-    // The written cookie is normalized to "auth=Fe26.2*new; oc_locale=en";
-    // its tail is the whole header's last 4 chars.
-    expect(view.cookie).toEqual({ set: true, tail: 'auth=Fe26.2*new; oc_locale=en'.slice(-4) })
-    expect(view.workspaceID).toEqual({ set: true, tail: 'wrk_new'.slice(-4) })
-    // loadConfig now reads the written file (normalized cookie with auth=).
-    const cfg = loadConfig()
-    expect(cfg.workspaceID).toBe('wrk_new')
-    expect(cfg.cookie).toBe('auth=Fe26.2*new; oc_locale=en')
+  it('writes a new key to the config file and returns the masked view', () => {
+    const view = writeConfigFile({ apiKey: 'Bearer sk-written-key-9abc' })
+    // The written value is normalized: the Bearer prefix is stripped.
+    expect(view.apiKey).toEqual({ set: true, tail: '9abc' })
+    const raw = JSON.parse(readFileSync(configFilePath(), 'utf8')) as Record<string, unknown>
+    expect(raw.apiKey).toBe('sk-written-key-9abc')
+    expect(loadConfig().apiKey).toBe('sk-written-key-9abc')
   })
 
-  it('preserves other fields and clears a field with null', () => {
-    writeFileSync(join(tmp, 'ocgo-usage.json'), JSON.stringify({
-      cookie: 'auth=Fe26.2*old; oc_locale=zh',
-      workspaceID: 'wrk_old',
-      baseUrl: 'https://example.com',
-      cacheTTL: 120,
-    }))
-    const view = writeConfigFile({ cookie: null, workspaceID: 'wrk_new2' })
-    expect(view.cookie).toEqual({ set: false, tail: '' })
-    expect(view.workspaceID).toEqual({ set: true, tail: 'wrk_new2'.slice(-4) })
-    const raw = JSON.parse(readFileSync(join(tmp, 'ocgo-usage.json'), 'utf8'))
-    expect(raw.baseUrl).toBe('https://example.com')
-    expect(raw.cacheTTL).toBe(120)
-    expect(raw.cookie).toBeUndefined()
+  it('clears the key when passed null', () => {
+    writeConfigFile({ apiKey: 'sk-old' })
+    const view = writeConfigFile({ apiKey: null })
+    expect(view.apiKey).toEqual({ set: false, tail: '' })
+    const raw = JSON.parse(readFileSync(configFilePath(), 'utf8')) as Record<string, unknown>
+    expect(raw.apiKey).toBeUndefined()
   })
 
-  it('keeps fields absent from the write untouched (no accidental clear)', () => {
-    writeFileSync(join(tmp, 'ocgo-usage.json'), JSON.stringify({
-      cookie: 'auth=Fe26.2*keepme; oc_locale=zh',
-      workspaceID: 'wrk_keep',
-    }))
-    // Only workspaceID is present in the partial; cookie must survive.
-    const view = writeConfigFile({ workspaceID: 'wrk_new3' })
-    expect(view.workspaceID).toEqual({ set: true, tail: 'wrk_new3'.slice(-4) })
-    expect(view.cookie).toEqual({ set: true, tail: 'oc_locale=zh'.slice(-4) })
-    const raw = JSON.parse(readFileSync(join(tmp, 'ocgo-usage.json'), 'utf8'))
-    expect(raw.cookie).toBe('auth=Fe26.2*keepme; oc_locale=zh')
-    expect(raw.workspaceID).toBe('wrk_new3')
+  it('preserves unrelated fields already in the config file', () => {
+    writeFileSync(configFilePath(), JSON.stringify({ apiKey: 'sk-old', baseUrl: 'https://keep.test' }))
+    writeConfigFile({ apiKey: 'sk-new' })
+    const raw = JSON.parse(readFileSync(configFilePath(), 'utf8')) as Record<string, unknown>
+    expect(raw.baseUrl).toBe('https://keep.test')
+    expect(raw.apiKey).toBe('sk-new')
   })
 })
