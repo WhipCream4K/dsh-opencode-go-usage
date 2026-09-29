@@ -1,74 +1,81 @@
 # dsh-opencode-go-usage
 
-[English](README.en.md) | 中文
-
 [![npm](https://img.shields.io/npm/v/dsh-ocgo-usage)](https://www.npmjs.com/package/dsh-ocgo-usage)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![awesome · DSH plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
-![Footer demo](assets/custom-footer.png)
+![The usage chip in the composer tool row](assets/custom-footer.png)
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle**，在 Web 界面输入框的工具行（模型选择器旁）显示 [OpenCode Go](https://opencode.ai/docs/go/) 订阅用量。
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) **bundle** that shows [OpenCode Go](https://opencode.ai/docs/go/) subscription usage in the Web GUI's composer tool row, next to the model selector.
 
-它是 [pi-ocgo-usage](https://github.com/v587d/pi-ocgo-usage)（Pi 插件）的 Web 对应物：三个用量窗口（5h 滚动 / 每周 / 每月）的百分比与重置倒计时，按阈值变色，让你在窗口耗尽、请求被限流之前就发现。
+The Web counterpart of the [pi-ocgo-usage](https://github.com/v587d/pi-ocgo-usage) Pi extension: three usage windows (rolling 5h, weekly, monthly) with percentages and reset countdowns, colour-coded so you see a window approaching exhaustion before you hit the rate limit mid-work.
+
+Collapsed, the chip is a compact strip:
 
 ```
-OpenCode Go: 5h 0% (1h 23m) · wk 65% (2d 20h) · mo 83% (6d 21h) · upd 20:15
+[ OCGo ]  · 5h 10%  · wk 4%  · mo 52%  ⌄
 ```
 
-> **只需要一个 API Key。** 本插件读取 OpenCode 官方配额接口
-> `GET https://opencode.ai/zen/go/v1/usage`，用 `Authorization: Bearer <OPENCODE_GO_API_KEY>`
-> 认证——就是 `opencode-go` 模型 provider 已经在用的那把 key。
-> **不需要 workspace id，也不需要浏览器会话 cookie。**
+Expanded, each window gets its own row:
 
-## 特性
+```
+5h Rolling        10%   resets in 2h 28m
+Weekly             4%   resets in 6d 5h
+Monthly           52%   resets in 22d 8h
+Set                    Refresh   upd 20:15
+```
 
-- **三个窗口** —— 5h 滚动 / 每周 / 每月 的百分比 + 重置倒计时（由接口返回的 `resetsAt` 换算）
-- **颜色阈值** —— 正常 → 黄色警告（≥80%）→ 红色错误（≥90% 或已限流）
-- **数据新鲜度** —— `upd HH:MM` 显示最近一次成功抓取时间
-- **轻量轮询** —— 每 10s 轮询（切回标签页立即刷新）；host 端 300s 缓存（TTL 可配）+ 60s 失败冷却，不会频繁打扰 opencode.ai
-- **Provider 感知** —— 仅当会话当前模型走 `opencode-go` provider 时显示；每次轮询读取内存中的实时模型选择（会话的 `modelSelection` 投影，不发起网络请求），切到 DeepSeek 官方等其它 provider 后一个轮询周期内自动隐藏，切回自动恢复（与 pi-ocgo-usage 行为一致）
-- **点击展开** —— 详情面板显示每个窗口的重置倒计时，左下角 `Set` 可配置凭据，右侧 `refresh upd HH:MM` 手动刷新
-- **内置凭据编辑器** —— 无需碰终端：`Set` 面板直接写入 API Key（输入框以占位提示表示"已配置"，点击外部 / Esc / 保存确认写入）。写入目标是 DSH 的凭据库（`ctx.credentials`），也就是模型 provider 自己读的那个存储，因此改完立即生效、不需要重启
-- **优雅降级** —— 配置缺失显示 `<err:noconfig>`，key 被拒显示 `<err:apikey>`；出错时点击 chip 直接进入 Set 面板
-- **API Key 只在 host 侧** —— 浏览器只访问同源 `/api/ocgo-usage` JSON 端点，key 永不进入页面
-- **与界面语言无关** —— 接口返回 JSON，不再解析 SSR 页面上的中英文标签，中英文界面结果完全一致
+> **An API key is all it takes.** The plugin reads the official quota endpoint
+> `GET https://opencode.ai/zen/go/v1/usage`, authenticated with
+> `Authorization: Bearer <OPENCODE_GO_API_KEY>` — the same key the `opencode-go`
+> model provider already uses. **No workspace id and no browser session cookie.**
 
-## 环境要求
+## Features
 
-- DeepSeek Harness（web profile），客户端需提供会话 `modelSelection` 投影（已在 `0.1.7-rc.2` 上验证）
-- `PATH` 上有 pnpm（`dsh plugin` 需要）
+- **Three windows** — rolling (5h) / weekly / monthly percent plus a reset countdown derived from the API's `resetsAt` stamps
+- **Colour thresholds** — the percentage starts shading at 50%, deepens through amber at 60/70%, turns red at ≥80%, and is bold red at ≥90% or when the window is rate-limited
+- **Data freshness** — `upd HH:MM` shows the last successful fetch time
+- **Lightweight polling** — every 10 s and on tab refocus; the host caches for 300 s (configurable TTL) with a 60 s failure cooldown, so opencode.ai is never hammered
+- **Provider-aware** — the chip shows only while the session's current model routes through the `opencode-go` provider. Visibility reads the live in-memory selection (the session's `modelSelection` projection, no network request) on every poll, so switching to e.g. DeepSeek official via `/model` hides it within one 10 s cycle and switching back re-shows it
+- **Click to expand** — a detail panel with per-window reset countdowns, a `Set` credential editor, and `refresh upd HH:MM`
+- **Built-in credential editor** — no terminal needed: the `Set` panel writes the API key straight into DSH's credential store (the one the model provider itself reads), so the write takes effect immediately with no restart. A configured key is signalled by the field's placeholder rather than by echoing any characters
+- **Graceful degradation** — missing config shows `<err:noconfig>`, a rejected key `<err:apikey>`; on error, clicking the chip opens the Set editor directly
+- **API key stays on the host** — the browser only ever talks to the same-origin `/api/ocgo-usage` JSON endpoint; the key never reaches the page
+- **Bilingual UI copy** — the detail panel, tooltips, buttons, and error text come from typed `zh`/`en` dictionaries registered with DSH's locale service. The collapsed chip keeps the language-neutral compact `5h` / `wk` / `mo` abbreviations, and the API returns JSON, so the numbers read the same in either language
 
-浏览器半通过 `ctx.sessions.binding(id).session.projections.faceOf('modelSelection')` 读取当前 provider。`0.1.7-rc.2` 移除了旧版的 `connection.api.sessions`；如果某个 Harness 版本两套 API 都没有，chip 会注册成功但永远不渲染，也不会在控制台留任何提示。
+## Requirements
 
-## 安装
+- DeepSeek Harness (web profile) whose client exposes the session `modelSelection` projection — **verified on `0.2.0-rc.2`**
+- pnpm on `PATH` (for `dsh plugin`)
 
-这是一个标准的 dsh **bundle**：`package.json` 声明了 `dsh.bundle`，通过 `dsh plugin --profile web add <spec>` 安装（pnpm 转发器），自动加入 profile 的 `dsh.profile.bundles`。仓库内置预构建的 `lib/` 产物，**安装无需任何构建步骤或构建权限**——遵循官方 [publish 指南](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)。
+## Installation
 
-### 从 GitHub 安装（推荐）
+This package is a standard dsh **bundle**: it declares `dsh.bundle` in its manifest and installs through `dsh plugin --profile web add <spec>` (a pnpm forwarder), which links the package and appends it to the profile's `dsh.profile.bundles`. The repo ships pre-built `lib/` artifacts, so **no build step or install-time build permission is needed** — this follows the official [publish guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md).
+
+### From GitHub (recommended)
 
 ```sh
 dsh plugin --profile web add github:WhipCream4K/dsh-opencode-go-usage
 ```
 
-因为 `lib/` 已提交到仓库，pnpm 直接安装构建好的包，不会要求构建脚本授权。
+Because `lib/` is committed, pnpm installs the built package directly and never asks for a build-script allowance.
 
-### 从 npm 安装（发布后）
+### From npm
 
 ```sh
 dsh plugin --profile web add dsh-ocgo-usage
 ```
 
-> **关于包名：** 仓库名为 `dsh-opencode-go-usage`，但 npm 上同名包已被他人抢先占用（一个功能类似的第三方插件），因此 npm 发布名定为 `dsh-ocgo-usage`。GitHub 安装（推荐）不受影响。
+> **About the name:** the repo is `dsh-opencode-go-usage`, but that npm name is already taken by a similar third-party plugin, so the npm package publishes as `dsh-ocgo-usage`. GitHub installs are unaffected.
 
-### 从 tarball 安装
+### From a tarball
 
 ```sh
-pnpm pack            # 在本仓库内 → dsh-ocgo-usage-0.2.0.tgz
-dsh plugin --profile web add ./dsh-ocgo-usage-0.2.0.tgz
+pnpm pack            # in this repo → dsh-ocgo-usage-0.3.0.tgz
+dsh plugin --profile web add ./dsh-ocgo-usage-0.3.0.tgz
 ```
 
-### 本地开发安装
+### From a local checkout (development)
 
 ```sh
 git clone https://github.com/WhipCream4K/dsh-opencode-go-usage.git
@@ -78,31 +85,31 @@ pnpm run build
 dsh plugin --profile web add link:$(pwd)
 ```
 
-**重启 `dsh web` 并刷新页面**，chip 出现在输入框工具行、模型选择器旁。不启动即可验证插件层已组合：
+**Restart `dsh web`, then refresh the page.** The usage chip appears in the composer tool row, next to the model selector. Verify the plugin layer is composed without booting:
 
 ```sh
-dsh --profile web --dump-config   # 应显示 "# == dsh-ocgo-usage" 层
+dsh --profile web --dump-config   # shows a "# == dsh-ocgo-usage" layer
 ```
 
-> host 半的代码改动**必须重启 `dsh web`** 才会生效：Node 的 ESM 模块缓存不会因为 patch 层热重载而重新导入入口模块。
+> Host-half code changes only take effect after a **restart of `dsh web`**: Node's ESM module cache will not re-import the entry module just because the patch layer hot-reloads.
 
-## 配置
+## Configuration
 
-### 方式一：什么都不做（推荐）
+### Option 1: do nothing (recommended)
 
-DSH 把 provider 的 API Key 存在凭据库里，也就是 `$DSH_HOME/.credentials.yaml` 的 `refs:` 段。插件每次刷新都通过 `ctx.credentials.resolve('OPENCODE_GO_API_KEY')` 读取它——这正是 `opencode-go` provider 自己用的那把 key。已经在 dsh 里配好 OpenCode Go 的用户**无需任何额外配置**。
+DSH keeps provider API keys in its credential store — the `refs:` section of `$DSH_HOME/.credentials.yaml`. The plugin resolves `OPENCODE_GO_API_KEY` through `ctx.credentials` on every refresh, which is the very key the `opencode-go` provider uses. If OpenCode Go already works in your dsh, **there is nothing else to configure**.
 
-### 方式二：界面内 Set 面板
+### Option 2: the in-UI Set panel
 
-点击 chip 展开详情 → 左下角 `Set` → 输入 API Key → 点击外部 / Esc / 保存按钮确认，立即生效。面板会写入同一个凭据库（不是插件私有的配置文件），所以写入的 key 就是真正生效的那把，不存在被旧值遮蔽的问题。若该引用由只读来源（例如进程环境变量）提供，面板会明确报错而不是假装保存成功。
+Click the chip to expand → `Set` (bottom-left) → type the API key → click outside, press Esc, or hit Save — it takes effect immediately. The panel writes to that same credential store rather than to a private config file, so the key it saves is the one actually used and cannot be shadowed by a stale value. When the reference is supplied by a read-only source (a process environment variable, say) the panel reports that plainly instead of pretending the save worked.
 
-### 方式三：环境变量或配置文件（凭据库的兜底）
+### Option 3: environment variable or config file (fallbacks)
 
 ```sh
 export OPENCODE_GO_API_KEY="sk-..."
 ```
 
-或写入 `$DSH_HOME/ocgo-usage.json`（默认 `~/.dsh/ocgo-usage.json`）：
+or write `$DSH_HOME/ocgo-usage.json` (default `~/.dsh/ocgo-usage.json`):
 
 ```jsonc
 {
@@ -114,112 +121,149 @@ export OPENCODE_GO_API_KEY="sk-..."
 chmod 600 ~/.dsh/ocgo-usage.json
 ```
 
-解析顺序：**凭据库（`ctx.credentials`）> 环境变量 > 配置文件**。凭据库优先，因为那是 DSH 存 provider key 的地方。
+Resolution order: **credential store (`ctx.credentials`) > environment variable > config file.** The credential store wins because that is where DSH keeps provider keys.
 
-### 可选覆盖项
+### Optional overrides
 
-| 环境变量 | 默认值 | 说明 |
+| Env var | Default | Description |
 |---|---|---|
-| `OPENCODE_GO_BASE_URL` | `https://opencode.ai` | API 基础地址（配额路径固定为 `/zen/go/v1/usage`） |
-| `OPENCODE_GO_CACHE_TTL` | `300` | host 缓存秒数，范围 60–3600 |
-| `OPENCODE_GO_TIMEOUT_MS` | `10000` | HTTP 超时 |
+| `OPENCODE_GO_BASE_URL` | `https://opencode.ai` | API base URL (the quota path is fixed at `/zen/go/v1/usage`) |
+| `OPENCODE_GO_CACHE_TTL` | `300` | Host cache TTL in seconds, clamped to 60–3600 |
+| `OPENCODE_GO_TIMEOUT_MS` | `10000` | HTTP timeout |
 
-组合层配置（`~/.dsh/profiles/web/cordis.patch.yml`）：
+Composition-level config (via `~/.dsh/profiles/web/cordis.patch.yml`):
 
 ```yaml
 - id: ocgo-usage
   config:
-    enabled: false                        # 总开关，默认 true
-    apiKeyEnv: OPENCODE_GO_API_KEY        # 凭据引用的环境变量名，默认即此
+    enabled: false                        # master switch, default true
+    apiKeyEnv: OPENCODE_GO_API_KEY        # credential reference name; this is the default
 ```
 
-> **API Key 无效或过期：** chip 显示 `<err:apikey>`（HTTP 401/403）。重新签发 key 后，通过 Set 面板更新，或在 `$DSH_HOME/.credentials.yaml` 中更新 `OPENCODE_GO_API_KEY`。
+> **Invalid or expired API key:** the chip shows `<err:apikey>` (HTTP 401/403). After reissuing the key, update it through the Set panel or edit `OPENCODE_GO_API_KEY` in `$DSH_HOME/.credentials.yaml`.
 
-### 错误码
+### Error codes
 
-| `<err:...>` | 含义 |
+| `<err:...>` | Meaning |
 |---|---|
-| `noconfig` | 三处都没找到可用 key |
-| `apikey` | HTTP 401/403，key 无效或已被吊销 |
-| `httpNNN` | 其它 HTTP 失败 |
-| `timeout` | 请求超时 |
-| `parse` | 响应不是合法 JSON |
-| `empty` | HTTP 200 但没有任何可识别窗口 |
-| `fetch` | 网络层失败 |
-| `disabled` | 插件被 `enabled: false` 关闭 |
+| `noconfig` | No usable key found in any of the three sources |
+| `apikey` | HTTP 401/403 — key invalid or revoked |
+| `httpNNN` | Any other HTTP failure |
+| `timeout` | Request timed out |
+| `parse` | Response was not valid JSON |
+| `empty` | HTTP 200 with no recognizable window |
+| `fetch` | Network-layer failure |
+| `disabled` | Plugin switched off with `enabled: false` |
 
-## 使用
+## Usage
 
-点击 chip 展开详情面板：每个窗口显示完整名称、百分比与重置倒计时；右下角 `refresh upd HH:MM` 手动刷新并显示数据时间。
+Click the chip to expand the detail panel: each window shows its full name, percent, and reset countdown; `refresh upd HH:MM` (bottom-right) refreshes manually and shows the data time.
 
 ![Usage detail](assets/usage-detail.png)
 
-Set 面板（单一 API Key 字段；已配置时输入框以提示文案表示，而不是回显任何字符）：
+The Set panel is a single API Key field; when a key is already configured the field says so through its placeholder rather than echoing any characters:
 
 ![Set editor](assets/set-cookie-wid.png)
 
-### chip 不显示
+### The chip never shows up
 
-可见性只认 `opencode-go` 和 `opencode-go/<子路由>` 这两种 provider id。形如 `opencode-go-live-completions` 的连字符路由名会被当成别的 provider 静默忽略；chip 不渲染，控制台也没有任何提示。把 profile 的 `cordis.patch.yml` 里该路由 id 改成 `opencode-go/live-completions` 这种带斜杠的写法即可。
+Visibility accepts exactly two provider id shapes: `opencode-go` and `opencode-go/<sub-route>`. A hyphenated route name such as `opencode-go-live-completions` is treated as a different provider and ignored without a word, so the chip never renders and the console stays empty. Rename that route in the profile's `cordis.patch.yml` to `opencode-go/live-completions` and it appears.
 
-另外，**尚未提交过模型选择的新会话**里 `modelSelection` 投影还是空的，此时 chip 会隐藏——发出第一条消息（或在模型选择器里选定模型）后即出现。
+Also, in a **brand-new session that has never committed a model selection** the `modelSelection` projection is still empty, so the chip stays hidden — it appears once you send the first message (or pick a model in the model selector).
 
-## 工作原理
+## How it works
 
-- **Host 半**（`src/index.ts`、`src/service.ts`、`src/api.ts`、`src/routes.ts`、`src/credentials.ts`）—— 每次刷新先通过凭据库（`ctx.credentials`）解析 `OPENCODE_GO_API_KEY`，回退到环境变量与 `$DSH_HOME/ocgo-usage.json`；然后 `GET https://opencode.ai/zen/go/v1/usage`（`Authorization: Bearer <key>`），把返回的 `usage.{rolling,weekly,monthly}.{status,percent,resetsAt}` 归一化为三个窗口（`resetInSec` 由 `resetsAt` 换算），缓存结果，通过同源 JSON 端点 `/api/ocgo-usage`（+ `/api/ocgo-usage/refresh`、`/api/ocgo-usage/config`）提供数据。
-- **浏览器半**（`src/client/`）—— 向 `conversation.input.right` slot（输入框工具行，模型选择器旁）注册 chip，每 10s 轮询 host 端点，按严重级别着色渲染三个窗口；可见性来自会话 `modelSelection` 投影里的实时 provider。
+- **Host half** (`src/index.ts`, `src/service.ts`, `src/api.ts`, `src/routes.ts`, `src/credentials.ts`) — on every refresh it first resolves `OPENCODE_GO_API_KEY` through the credential store (`ctx.credentials`), falling back to the environment and then `$DSH_HOME/ocgo-usage.json`; it then calls `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <key>` and normalizes the returned `usage.{rolling,weekly,monthly}.{status,percent,resetsAt}` into the three windows (`resetInSec` derived from `resetsAt`). Results are cached and served as same-origin JSON at `/api/ocgo-usage`, plus `/api/ocgo-usage/refresh` and `/api/ocgo-usage/config` (GET masked view, POST to write).
+- **Browser half** (`src/client/`) — registers a chip into the `conversation.input.right` slot (the composer tool row, next to the model selector), polls the host endpoints every 10 s, and renders the three windows with severity colours; visibility comes from the live provider in the session's `modelSelection` projection.
 
-浏览器永远看不到 API Key；抓取与解析全部在 host 侧完成。
+The browser never sees the API key; all fetching and parsing happen on the host.
 
-## 安全
+## Security
 
-- 只需要一把 OpenCode Go **API Key**——它是作用域受限的接口凭据，**不是**浏览器会话 cookie（旧版本需要的那个 cookie 能访问你账户内的全部 workspace、订阅与账单，已经不使用了）。
-- 插件**绝不**记录 key、不把它放进错误信息、不发送给浏览器。
-- 配置编辑器只把新值写入 DSH 凭据库；浏览器始终只看到"已配置/未配置"与末 4 位掩码，永远拿不到完整值。
+- All it needs is an OpenCode Go **API key** — a scoped interface credential, **not** the browser session cookie older versions required (that cookie granted access to every workspace, subscription, and billing detail in your account, and is no longer used at all).
+- The plugin **never** logs the key, includes it in error messages, or sends it to the browser.
+- The config editor writes new values only into the DSH credential store; the browser ever sees only "configured / not configured" plus a last-4 masked tail, never the full value.
 
-## 开发
+## Harness compatibility
+
+DSH's client APIs are pre-stable, and a release can delete a package a plugin imports: `0.2.0-rc.2` removed `@deepseek-ai/dsh-client-runtime`, which is what version 0.3.0 of this plugin was built against. Three things keep that from being silent breakage:
+
+1. **No removed-package imports.** The client half takes its context type from `@deepseek-ai/cordis` — seeded into the shell's module table — instead of a translation package, and imports every other DSH package type-only. The built bundle's only runtime requests are `react` and `react/jsx-runtime`.
+2. **Probed seams.** `src/client/harness-compat.ts` adapts the seams whose shape has changed between releases: slot arming (`ctx.slots.inject`, added in `0.2.0-rc.2`, with the older eager `register` as the fallback) and the session projection read (every hop optional, so a moved one leaves the chip hidden rather than throwing).
+3. **Contract tests.** `src/harness-contract.test.ts` reads the DSH packages actually installed in `node_modules` and asserts this plugin's assumptions against them: the slot key and its kind, the service names, the registration API, the route interface, and the built bundle's module requests. A DSH bump that moves any of them fails `pnpm test` by name, before it ever reaches a browser.
+
+`dsh.client.inject` lists the packages whose services the browser half consumes. It is a package-name edge, not a runtime dependency: a shell that renames a service leaves the contribution pending, and the chip simply stays hidden.
+
+### Upgrading to a new DSH release
+
+```sh
+pnpm install        # resolve the new @deepseek-ai/* versions
+pnpm run verify     # typecheck + build + the whole suite
+```
+
+Two follow-ups when the check names them:
+
+- **Shell module table changed** — refresh `shared/web-platform.ts` from `PLATFORM_MODULES` (and `PRELOADED_CLIENT_EXTERNALS`) in the DSH checkout's `packages/client/web/src/platform.ts`. The contract test fails if the bundle requests a module the table does not carry.
+- **Supply-chain policy** — pnpm enforces a 1-day minimum release age and DSH ships prereleases, so copy any `package@version` pair the install names into `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`.
+
+A moved slot key or a renamed service is a port, not a test edit: adapt `src/client/` and `src/client/harness-compat.ts`, then let the contract test confirm the new shape.
+
+## Development
 
 ```sh
 pnpm install
-pnpm run build     # tsc -b && tsdown → lib/
-pnpm run typecheck # tsc -b --pretty false
-pnpm test          # vitest run（解析器 / 配置 / 服务）
+pnpm run build      # tsc -b && tsdown → lib/
+pnpm run typecheck  # the host/client program and the test program
+pnpm test           # builds, then runs the whole suite
+pnpm run verify     # typecheck + test
 ```
 
-构建配置（`shared/tsdown.client.ts`）改编自 [dsh-balance-meter](https://github.com/Ghost011118/dsh-balance-meter)（BSD-3-Clause），后者是官方 DSH `packages/client/tsdown.client.ts` 的副本——它产出 web shell 模块表所需的 `window.__ModuleLoader__.load({id, factory})` 闭包工厂产物。
+`pnpm test` builds first on purpose: the contract suite inspects `lib/client.js` to prove the bundle requests nothing outside the shell's module table, so it must never run against a stale artifact.
+
+| Suite | Covers |
+|---|---|
+| `src/api.test.ts` | quota response parsing, error codes, timeouts |
+| `src/config.test.ts` | resolution order, key normalization, masking |
+| `src/service.test.ts` | caching, request dedup, failure cooldown, credential-seam writes |
+| `src/provider.test.ts` | the provider matcher |
+| `src/client/harness-compat.test.ts` | the shell shapes each shim adapts to (current, legacy, degraded) |
+| `src/client/index.test.ts` | the browser half mounted on a live cordis context with service doubles |
+| `src/index.test.ts` | the host half's JSON routes and their disposal on unload |
+| `src/harness-contract.test.ts` | the installed DSH release, and the built bundle |
+
+The build config (`shared/tsdown.client.ts`) is adapted from [dsh-balance-meter](https://github.com/Ghost011118/dsh-balance-meter) (BSD-3-Clause), itself a copy of the official DSH `packages/client/tsdown.client.ts` — it emits the `window.__ModuleLoader__.load({id, factory})` closure-factory artifact the web shell's module table consumes.
 
 ## License
 
-MIT —— 见 [LICENSE](./LICENSE)。
+MIT — see [LICENSE](./LICENSE).
 
 ## Changelog
 
-### v0.2.0 - 只用 API Key
+### v0.3.0 — DSH 0.2.0-rc.2 support
 
-**🎉 重大更新：不再需要 cookie 和 workspace id。**
+**Ported to `0.2.0-rc.2`, with the version coupling confined to one module.**
 
-- **🔑 官方配额接口** —— 改为 `GET https://opencode.ai/zen/go/v1/usage`，用 `Authorization: Bearer <OPENCODE_GO_API_KEY>` 认证，也就是 `opencode-go` provider 自己那把 key
-- **🗑️ 移除会话 cookie 与 workspace id** —— `OPENCODE_GO_COOKIE`、`OPENCODE_GO_WORKSPACE_ID` 与 `$DSH_HOME/ocgo-usage.json` 里的 `cookie` / `workspaceID` 字段全部废弃；SSR HTML 抓取与解析整条链路删除
-- **🔐 密钥走 DSH 凭据库** —— 通过 `ctx.credentials` 解析 `OPENCODE_GO_API_KEY`，与模型 provider 共用同一个存储，轮换 key 无需重启
-- **✏️ Set 面板改为单一 API Key 字段** —— 写入的是凭据库（真正生效的那个存储），而不是插件私有配置文件；若引用由只读来源提供则明确报错
-- **🌏 与界面语言无关** —— 接口返回 JSON，不再需要中英文标签解析，中英文界面结果天然一致（v2.0.0 引入的标签本地化解析随之删除）
-- **🧪 测试重写** —— 覆盖 JSON 解析、`resetsAt` 换算、错误码映射、凭据解析顺序与只读遮蔽保护（62 个用例）
+- **Fixed the deleted module** — `0.2.0-rc.2` removed `@deepseek-ai/dsh-client-runtime`, which the browser half imported `ClientContext` from. It now comes straight from `@deepseek-ai/cordis` (seeded into the shell's module table); every other DSH package is a type-only import
+- **Slot arming adapted** — `0.2.0-rc.2` added `ctx.slots.inject`, so a cross-package contribution no longer depends on apply order; a shell without it falls back to the eager `register`
+- **Module table synced** — `shared/web-platform.ts` now matches `0.2.0-rc.2`'s `PLATFORM_MODULES` (`dsh-client-store` takes the store-engine slot; the `dsh-client-runtime` exemption is gone). The built bundle requests only `react` and `react/jsx-runtime`
+- **Compatibility layer** — new `src/client/harness-compat.ts` collects the two seams that have moved between releases (slot arming, session projection read). Every hop of the projection read is optional, so a moved interface leaves the chip hidden instead of breaking the composer
+- **Manifest corrected** — `dsh.client.inject` names the four packages actually consumed, `@deepseek-ai/dsh-api-session-controller` moved into devDependencies, and the peer ranges opened to `>=0.2.0-rc.2` so a future release cannot raise a spurious unmet-peer warning
+- **Contract tests** — new `src/harness-contract.test.ts` (24 cases) reads the DSH packages installed in `node_modules` and checks the slot key and kind, the service names, the registration API, the route interface, and the built bundle's module requests and shape
+- **Wiring tests** — the browser half is now driven against a live cordis context with service doubles (covering both the new and legacy shell paths), and the host half against its JSON routes, masking, and unload disposal. `pnpm test` builds before running; 114 cases total
 
-### v2.0.0 - 中英双语支持（历史）
+### v0.2.0 — API-key-only reads
 
-**🎉 重大更新：现在支持中文界面了！**
+**No cookie and no workspace id any more.**
 
-- **🌏 国际化 (i18n) 支持**：自动识别 DeepSeek Harness 的中文/英文界面语言
-  - 新增中文标签解析：`滚动用量`、`每周用量`、`每月用量`
-  - 新增中文时间单位支持：秒、分钟、小时、天、周、月、年
-  - 智能匹配中英文重置提示：`Resets in` / `重置于`
-- **🎨 深色模式优化**：调整 Logo 在深色主题下的对比度，视觉更舒适
-- **🧪 完整测试覆盖**：新增中文场景单元测试，确保解析准确性
+- **Official quota endpoint** — reads `GET https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <OPENCODE_GO_API_KEY>`, the same key the `opencode-go` provider uses
+- **Session cookie and workspace id removed** — `OPENCODE_GO_COOKIE`, `OPENCODE_GO_WORKSPACE_ID`, and the `cookie` / `workspaceID` fields in `$DSH_HOME/ocgo-usage.json` are gone, along with the whole SSR HTML fetch-and-parse path
+- **Key lives in DSH's credential store** — resolved through `ctx.credentials`, shared with the model provider, so a rotated key needs no restart
+- **Set panel reduced to one API Key field** — it writes to that credential store rather than to a private config file, and reports plainly when a read-only source supplies the reference
+- **Locale-independent numbers** — the endpoint returns JSON, so there are no SSR labels to parse; the label-parsing added in v2.0.0 was deleted
+- **Tests rewritten** — JSON parsing, `resetsAt` conversion, error-code mapping, credential resolution order, and read-only shadowing protection
 
-特别感谢 [@waknow](https://github.com/waknow) 贡献了核心的中文本地化功能！🙏
+### v2.0.0 — bilingual UI (inherited history)
 
-> 💡 **版本选择建议**：
-> - 喜欢纯英文界面？继续使用 [v1.1.0](https://github.com/v587d/dsh-opencode-go-usage/releases/tag/v1.1.0)
-> - 需要中英双语支持？升级到 v2.0.0+
-
----
+- **Chinese UI support** — detection of DSH's zh/en interface locale, with localized window labels and reset phrases (this was label *parsing* at the time; v0.2.0 replaced that with typed dictionaries)
+- **Dark-mode logo** — the chip's mark follows the DSH theme
+- Thanks to [@waknow](https://github.com/waknow) for the original Chinese localization work, and to everyone who reported and fixed the cookie-era bugs recorded in [COOKIE-FIX.md](./COOKIE-FIX.md)
