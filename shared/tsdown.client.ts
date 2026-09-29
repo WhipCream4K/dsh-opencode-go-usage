@@ -46,19 +46,14 @@ const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 const SKIP_WORKSPACE_BUILD: UserConfig = { entry: '' }
 
 /**
- * Documented TEMPORARY exemption, not a platform module (hence not in
- * web-platform.ts): the snapshot-store engine (createSnapshotStore/defineStore/
- * shallowEqual) lives in runtime pending its promotion-time rehoming, and
- * five importers (locale, ui-layout, ui-conversation ×3) ride this single
- * exemption. At runtime the lazy CJS table answers the require natively:
- * runtime is an immediately-tier row, its factory is registered before any
- * dependent bundle materializes. TODO(webload/store-rehome): remove with the
- * store-engine relocation follow-up.
+ * Externals resolved from the loader module table. The shell baseline is the
+ * whole list: this package requests no non-baseline dynamic row, so it declares
+ * no `dsh.client.external` entries. DSH 0.2.0-rc.2 moved the snapshot-store
+ * engine into the baseline (`@deepseek-ai/dsh-client-store`) and deleted the
+ * `@deepseek-ai/dsh-client-runtime/client` exemption this preset used to carry,
+ * so the list is now exactly `PLATFORM_MODULES`.
  */
-const RUNTIME_STORE_EXEMPTION = '@deepseek-ai/dsh-client-runtime/client'
-
-/** Externals resolved from the loader module table: the platform seed entries plus the documented runtime exemption. */
-export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES, RUNTIME_STORE_EXEMPTION]
+export const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES]
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url))
 

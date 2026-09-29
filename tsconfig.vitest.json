@@ -1,4 +1,8 @@
 {
+  // Test-file program. It inherits the host/client compiler options but must
+  // undo the base `exclude`, which removes the very files this program exists
+  // to check, and re-include the ambient declarations (CSS Modules) the tests
+  // reach through the sources they import.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "composite": false,
@@ -7,5 +11,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+  "include": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/**/*.d.ts"],
+  "exclude": []
 }

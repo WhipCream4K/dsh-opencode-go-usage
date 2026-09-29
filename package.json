@@ -1,7 +1,7 @@
 {
   "name": "dsh-ocgo-usage",
   "description": "OpenCode Go subscription usage readout for the dsh web GUI: rolling (5h), weekly, and monthly usage windows with reset countdowns in the composer dock.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -9,8 +9,9 @@
   },
   "scripts": {
     "build": "tsc -b && tsdown",
-    "typecheck": "tsc -b --pretty false",
-    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.vitest.json --pretty false",
+    "test": "pnpm run build && vitest run",
+    "verify": "pnpm run typecheck && pnpm run test",
     "prepublishOnly": "pnpm run build"
   },
   "main": "lib/index.js",
@@ -57,28 +58,26 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-api-session-controller"
       ],
       "platform": "web"
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6"
+    "@deepseek-ai/cordis": ">=4.0.4",
+    "@deepseek-ai/dsh-host-webserver": ">=0.2.0-rc.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-api-session-controller": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.2.0-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "lightningcss": "^1.32.0",

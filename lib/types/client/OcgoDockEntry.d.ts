@@ -11,11 +11,22 @@
  */
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import { NS } from './locales.ts';
-/** Composed props of the dock entry (runtime + locale + injected session/provider face). */
-export type OcgoDockEntryProps = PropsRuntime<'conversation.input.right'> & PropsLocale<typeof NS> & {
-    dockSessionId?: string | undefined;
-    provider?: () => Promise<string | undefined>;
-};
+/**
+ * The injected business face the registration supplies: the tool row's owning
+ * session plus a live read of that session's current model provider.
+ */
+export interface OcgoInjected {
+    /** The session this dock entry renders for (slot inject factory arg). */
+    dockSessionId: string | undefined;
+    /**
+     * Resolve the CURRENT model provider of the dock's session from the live
+     * in-memory `modelSelection` projection (no network). Undefined when the
+     * session has no selection yet or the shell moved the hops.
+     */
+    provider(): Promise<string | undefined>;
+}
+/** Composed props of the dock entry (runtime + locale + the injected face). */
+export type OcgoDockEntryProps = PropsRuntime<'conversation.input.right'> & PropsLocale<typeof NS> & OcgoInjected;
 /**
  * Format a duration (seconds) compactly: 45s / 23m / 5h 23m / 4d 6h.
  */

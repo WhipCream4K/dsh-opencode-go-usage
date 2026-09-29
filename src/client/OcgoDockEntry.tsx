@@ -58,11 +58,26 @@ const ocgoApi = {
   ),
 }
 
-/** Composed props of the dock entry (runtime + locale + injected session/provider face). */
+/**
+ * The injected business face the registration supplies: the tool row's owning
+ * session plus a live read of that session's current model provider.
+ */
+export interface OcgoInjected {
+  /** The session this dock entry renders for (slot inject factory arg). */
+  dockSessionId: string | undefined
+  /**
+   * Resolve the CURRENT model provider of the dock's session from the live
+   * in-memory `modelSelection` projection (no network). Undefined when the
+   * session has no selection yet or the shell moved the hops.
+   */
+  provider(): Promise<string | undefined>
+}
+
+/** Composed props of the dock entry (runtime + locale + the injected face). */
 export type OcgoDockEntryProps =
   PropsRuntime<'conversation.input.right'>
   & PropsLocale<typeof NS>
-  & { dockSessionId?: string | undefined; provider?: () => Promise<string | undefined> }
+  & OcgoInjected
 
 /** Short window label: 5h / wk / mo. */
 const WINDOW_LABELS: Record<UsageWindowKind, string> = {
@@ -204,10 +219,12 @@ export function OcgoDockEntry(props: OcgoDockEntryProps): React.ReactElement | n
   //   2. only while visible, fetch the usage snapshot.
   const pollNow = useCallback(() => {
     let live = true
-    const provider = props.provider
-    const resolveProvider = provider !== undefined
-      ? Promise.resolve(provider()).then((p) => p ?? undefined, () => undefined)
-      : Promise.resolve(undefined)
+    // The injected face always supplies `provider`; the chain still isolates a
+    // refusing seam (and a synchronous throw) into "unknown provider", which
+    // renders as a hidden chip rather than a broken composer row.
+    const resolveProvider = Promise.resolve()
+      .then(() => props.provider())
+      .then((p) => p ?? undefined, () => undefined)
     resolveProvider.then((p) => {
       if (!live) return
       const shown = isOpenCodeGo(p)
